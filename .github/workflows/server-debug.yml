@@ -1,0 +1,1351 @@
+name: "Server — Full Audit & Safety Report"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PURPOSE
+#   Complete server inventory and safety audit. The output is designed to be
+#   fed to an AI agent so it has full context about:
+#     - What hardware, disks, and resources exist
+#     - What ports, paths, domains, and namespaces are already taken
+#     - What Docker artifacts exist (and which are leftover junk)
+#     - What databases exist and whether they are safe
+#     - What SSL certs, firewall rules, and users are configured
+#     - What constraints exist (SSD 256 GB, HDD 4 TB, etc.)
+#
+#   This prevents any future deployment (simama, madeena_company_profile,
+#   madeena_image_processing, or any other) from breaking the server.
+#
+# WHEN TO RUN
+#   • Before writing ANY new deploy/docker-compose file for any repo
+#   • After any deployment to verify nothing leaked
+#   • Periodically as a safety sweep
+#
+# SECRETS REQUIRED
+#   REMOTE_PATH, DB_DATABASE, DB_USERNAME, DB_PASSWORD, DB_ROOT_PASSWORD,
+#   DOCKERHUB_USERNAME, APP_DOMAIN, SUDO_PASSWORD, SSH_USER
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  HDD_MOUNT:   /media/nextcloud-data
+  NEXTCLOUD_USERNAME: ${{ secrets.NEXTCLOUD_USERNAME }}
+  SIMAMA_DB_DATA_DIR: /var/lib/simama/mysql
+  SIMAMA_STORAGE_DIR: /media/nextcloud-data/data/${{ secrets.NEXTCLOUD_USERNAME }}/files/simama_storage
+  SIMAMA_BACKUP_DIR: /media/nextcloud-data/data/${{ secrets.NEXTCLOUD_USERNAME }}/files/simama_backups
+  MADEENA_CP_DB_DATA_DIR: /var/lib/madeena_cp/mysql
+  MADEENA_CP_STORAGE_DIR: /media/nextcloud-data/data/${{ secrets.NEXTCLOUD_USERNAME }}/files/madeena_cp_storage
+  MADEENA_CP_BACKUP_DIR: /media/nextcloud-data/data/${{ secrets.NEXTCLOUD_USERNAME }}/files/madeena_cp_backups
+
+jobs:
+  full-audit:
+    name: "Full Server Audit"
+    runs-on: [self-hosted, linux, x64, production]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 1 — SERVER HARDWARE, OS & KERNEL
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "1/12 — Server Hardware, OS & Kernel"
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 1/12 — SERVER HARDWARE, OS & KERNEL               ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ HOSTNAME & OS"
+          hostname
+          cat /etc/os-release 2>/dev/null | head -6 || echo "  (os-release not found)"
+
+          echo ""
+          echo "▶ KERNEL"
+          uname -a
+
+          echo ""
+          echo "▶ CPU"
+          echo "  Logical CPUs: $(nproc)"
+          lscpu | { grep -E "^(Architecture|Model name|CPU\(s\)|Thread|Core|Socket|MHz|max MHz)" || true; } \
+            | sed 's/^/  /'
+
+          echo ""
+          echo "▶ MEMORY"
+          free -h
+          echo ""
+          echo "  Total physical RAM: $(grep MemTotal /proc/meminfo | awk '{printf "%.1f GB", $2/1024/1024}')"
+
+          echo ""
+          echo "▶ SWAP"
+          swapon --show 2>/dev/null || echo "  No swap configured"
+
+          echo ""
+          echo "▶ UPTIME & LOAD"
+          uptime
+
+          echo ""
+          echo "▶ TIMEZONE"
+          timedatectl 2>/dev/null | { grep -E "Time zone|Local time" || true; } | sed 's/^/  /'
+          # Fallback if timedatectl has no output
+          if ! (timedatectl 2>/dev/null | grep -q "Time zone") 2>/dev/null; then
+            date +'  Timezone: %Z (%:z)'
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 2 — DISK & STORAGE LAYOUT
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "2/12 — Disk & Storage Layout"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 2/12 — DISK & STORAGE LAYOUT                      ║"
+          echo "║  SSD: 256 GB (/)  |  HDD: 4 TB ($HDD_MOUNT)               ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ PHYSICAL BLOCK DEVICES"
+          lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE,LABEL,MODEL 2>/dev/null \
+            || echo "  (lsblk not available)"
+
+          echo ""
+          echo "▶ ALL MOUNTED FILESYSTEMS"
+          df -hT
+
+          echo ""
+          echo "▶ DISK USAGE SUMMARY"
+          SSD_TOTAL=$(df -h "/" | tail -1 | awk '{print $2}')
+          SSD_USED=$(df -h "/" | tail -1 | awk '{print $3}')
+          SSD_FREE=$(df -h "/" | tail -1 | awk '{print $4}')
+          SSD_PCT=$(df "/" | tail -1 | awk '{print $5}')
+          echo "  SSD (/):"
+          echo "    Total: $SSD_TOTAL | Used: $SSD_USED | Free: $SSD_FREE | Usage: $SSD_PCT"
+
+          if mountpoint -q "$HDD_MOUNT" 2>/dev/null; then
+            HDD_DEV=$(df "$HDD_MOUNT" | tail -1 | awk '{print $1}')
+            HDD_TOTAL=$(df -h "$HDD_MOUNT" | tail -1 | awk '{print $2}')
+            HDD_USED=$(df -h "$HDD_MOUNT" | tail -1 | awk '{print $3}')
+            HDD_FREE=$(df -h "$HDD_MOUNT" | tail -1 | awk '{print $4}')
+            HDD_PCT=$(df "$HDD_MOUNT" | tail -1 | awk '{print $5}')
+            echo "  HDD ($HDD_MOUNT):"
+            echo "    Device: $HDD_DEV"
+            echo "    Total: $HDD_TOTAL | Used: $HDD_USED | Free: $HDD_FREE | Usage: $HDD_PCT"
+          else
+            echo "  ❌ HDD NOT MOUNTED at $HDD_MOUNT"
+          fi
+
+          echo ""
+          SSD_PCT_NUM=$(echo "$SSD_PCT" | tr -d '%')
+          if [ -n "$SSD_PCT_NUM" ] && [ "$SSD_PCT_NUM" -gt 80 ]; then
+            echo "  ⚠️  SSD is ${SSD_PCT} full — high risk of deployment failures!"
+          fi
+
+          echo ""
+          echo "▶ INODE USAGE (can cause failures even with free disk space)"
+          df -i / "$HDD_MOUNT" 2>/dev/null || df -i /
+
+          echo ""
+          echo "▶ /etc/fstab (AUTO-MOUNT ON REBOOT)"
+          { grep -v '^#' /etc/fstab || true; } | { grep -v '^$' || true; } || echo "  (empty)"
+          echo ""
+          FSTAB_HDD=$(grep -E '^UUID|^LABEL|^/dev' /etc/fstab \
+            | grep -iE "/media|/mnt|/data" || true)
+          if [ -n "$FSTAB_HDD" ]; then
+            echo "  ✅ HDD auto-mount entries found:"
+            echo "$FSTAB_HDD" | sed 's/^/    /'
+          else
+            echo "  ❌ NO auto-mount entry for /media or /mnt in fstab!"
+            echo "     HDD will NOT mount after server reboot — data will appear lost."
+          fi
+
+          echo ""
+          echo "▶ LARGE DIRECTORIES ON SSD (top 15)"
+          { du -xsh /* 2>/dev/null || true; } | sort -hr | head -15 | sed 's/^/  /'
+
+          echo ""
+          echo "▶ DISK SMART STATUS"
+          if command -v smartctl >/dev/null 2>&1; then
+            for disk in $(lsblk -nd -o NAME | { grep -E '^sd|^nvme' || true; }); do
+              [ -z "$disk" ] && continue
+              echo "  /dev/$disk:"
+              echo "$SUDO_PASSWORD" | sudo -S smartctl -H "/dev/$disk" 2>/dev/null \
+                | { grep -E "SMART overall|test result|Temperature|Reallocated" || true; } \
+                | sed 's/^/    /' || echo "    (SMART not available)"
+            done
+          else
+            echo "  smartctl not installed (apt install smartmontools)"
+          fi
+
+          echo ""
+          echo "▶ KEY DIRECTORIES ON HDD (what's stored there)"
+          if [ -d "$HDD_MOUNT" ]; then
+            if [ -r "$HDD_MOUNT" ] && [ -x "$HDD_MOUNT" ]; then
+              ls -la "$HDD_MOUNT" 2>/dev/null | sed 's/^/  /' || true
+              echo ""
+              { du -sh "$HDD_MOUNT"/* 2>/dev/null || true; } | sort -hr | sed 's/^/  /'
+            else
+              echo "  ⚠️  Permission denied for $HDD_MOUNT as $(whoami). Using sudo..."
+              echo "$SUDO_PASSWORD" | sudo -S ls -la "$HDD_MOUNT" 2>/dev/null \
+                | sed 's/^/  /' || echo "  (could not list via sudo either)"
+              echo ""
+              echo "$SUDO_PASSWORD" | sudo -S bash -c "du -sh '$HDD_MOUNT'/* 2>/dev/null | sort -hr" \
+                | sed 's/^/  /' || true
+            fi
+          else
+            echo "  ℹ️  $HDD_MOUNT does not exist."
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 3 — NETWORK, FIREWALL & PORTS
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "3/12 — Network, Firewall & Ports"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 3/12 — NETWORK, FIREWALL & PORTS                  ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ NETWORK INTERFACES"
+          ip -br addr show 2>/dev/null || ip addr show
+
+          echo ""
+          echo "▶ DEFAULT ROUTE"
+          ip route show default 2>/dev/null || echo "  (could not determine)"
+
+          echo ""
+          echo "▶ DNS CONFIGURATION"
+          cat /etc/resolv.conf 2>/dev/null | { grep -v '^#' || true; } | sed 's/^/  /'
+
+          echo ""
+          echo "▶ ALL LISTENING PORTS (complete port map)"
+          echo "  ─── This tells future deployments which ports are TAKEN ───"
+          if command -v ss >/dev/null 2>&1; then
+            ss -ltnp 2>/dev/null | sed 's/^/  /'
+          elif command -v netstat >/dev/null 2>&1; then
+            netstat -ltnp 2>/dev/null | sed 's/^/  /'
+          fi
+
+          echo ""
+          echo "▶ PORT RESERVATION MAP (known Madeena services)"
+          echo "  Port 80    : Host Nginx (HTTP → HTTPS redirect)"
+          echo "  Port 443   : Host Nginx (HTTPS reverse proxy)"
+          echo "  Port 8000  : PBU50 (if deployed)"
+          echo "  Port 8001  : Dashboard (if deployed)"
+          echo "  Port 8010  : Simama (simama_nginx → simama_app)"
+          echo "  Port 8011  : Madeena CP (madeena_cp_nginx → madeena_cp_app)"
+          echo "  Port 8080  : Nextcloud (if deployed)"
+          echo "  Port 3306  : MySQL (internal to Docker, should NOT be exposed to host)"
+          echo ""
+          echo "  Actual port usage scan:"
+          for port in 22 80 443 3306 8000 8001 8010 8080 9000; do
+            if ss -ltn 2>/dev/null | grep -q ":$port "; then
+              PROC=$(ss -ltnp 2>/dev/null | grep ":$port " | head -1 | grep -oP 'users:\(\("\K[^"]+' || echo "unknown")
+              echo "    Port $port: ✅ IN USE ($PROC)"
+            else
+              echo "    Port $port: ⚪ FREE"
+            fi
+          done
+
+          echo ""
+          echo "▶ UFW FIREWALL STATUS"
+          if command -v ufw >/dev/null 2>&1; then
+            echo "$SUDO_PASSWORD" | sudo -S ufw status numbered 2>/dev/null | sed 's/^/  /' \
+              || echo "$SUDO_PASSWORD" | sudo -S ufw status 2>/dev/null | sed 's/^/  /' \
+              || echo "  (could not read UFW status)"
+          else
+            echo "  UFW not installed"
+          fi
+
+          echo ""
+          echo "▶ IPTABLES RULES (Docker-managed + custom)"
+          echo "$SUDO_PASSWORD" | sudo -S iptables -L -n --line-numbers 2>/dev/null \
+            | head -60 | sed 's/^/  /' || echo "  (could not read iptables)"
+
+          echo ""
+          echo "▶ NEXTCLOUD LISTEN ADDRESS (port 81)"
+          if command -v ss >/dev/null 2>&1; then
+            NEXTCLOUD_LISTEN=$(ss -H -ltnp 'sport = :81' 2>/dev/null | awk '{print $4 "  " $5}' | head -n 1)
+            if [ -n "$NEXTCLOUD_LISTEN" ]; then
+              echo "$NEXTCLOUD_LISTEN" | sed 's/^/  /'
+              if echo "$NEXTCLOUD_LISTEN" | grep -qE '127\.0\.0\.1:81|\[::1\]:81'; then
+                echo "  ⚠️ Nextcloud appears bound to loopback only; Docker containers will not be able to reach it via the host gateway."
+              elif echo "$NEXTCLOUD_LISTEN" | grep -qE '^\*:81|0\.0\.0\.0:81|\[::\]:81'; then
+                echo "  ✅ Nextcloud is listening on all interfaces for port 81."
+              else
+                echo "  ℹ️ Nextcloud is listening on port 81, but the bind address should be reviewed."
+              fi
+            else
+              echo "  ❌ No listening socket found on port 81."
+              echo "  Nextcloud or its reverse proxy is not exposing the WebDAV endpoint on this host."
+            fi
+          else
+            echo "  ss not installed"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 4 — SSL / TLS CERTIFICATES
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "4/12 — SSL/TLS Certificates"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          APP_DOMAIN:    ${{ secrets.APP_DOMAIN }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 4/12 — SSL/TLS CERTIFICATES                       ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ CERTBOT CERTIFICATES"
+          if command -v certbot >/dev/null 2>&1; then
+            echo "$SUDO_PASSWORD" | sudo -S certbot certificates 2>/dev/null | sed 's/^/  /' \
+              || echo "  (could not list certs)"
+          else
+            echo "  certbot not installed"
+          fi
+
+          echo ""
+          echo "▶ SSL CERT FILES IN /etc/letsencrypt/live/"
+          if [ -d "/etc/letsencrypt/live" ]; then
+            echo "$SUDO_PASSWORD" | sudo -S ls -la /etc/letsencrypt/live/ 2>/dev/null | sed 's/^/  /'
+          else
+            echo "  /etc/letsencrypt/live/ does not exist"
+          fi
+
+          echo ""
+          echo "▶ CERT EXPIRY CHECK (live domains)"
+          for domain in ${APP_DOMAIN:-}; do
+            if [ -n "$domain" ]; then
+              echo "  Domain: $domain"
+              EXPIRY=$(echo | openssl s_client -servername "$domain" -connect "$domain:443" 2>/dev/null \
+                | openssl x509 -noout -dates 2>/dev/null || echo "    (could not connect)")
+              echo "  $EXPIRY" | sed 's/^/    /'
+            fi
+          done
+
+          echo ""
+          echo "▶ CERTBOT AUTO-RENEWAL TIMER"
+          CERT_TIMERS=$(systemctl list-timers --all 2>/dev/null | { grep -i cert || true; })
+          if [ -n "$CERT_TIMERS" ]; then
+            echo "$CERT_TIMERS" | sed 's/^/  /'
+          else
+            echo "  (no certbot timer found)"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 5 — SYSTEM USERS, SSH & SUDO
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "5/12 — System Users, SSH & Sudo"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          SSH_USER:      ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 5/12 — SYSTEM USERS, SSH & SUDO                   ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ HUMAN USER ACCOUNTS (UID ≥ 1000)"
+          awk -F: '$3 >= 1000 && $3 < 65534 {printf "  %-20s UID=%-6s HOME=%s SHELL=%s\n", $1, $3, $6, $7}' /etc/passwd
+
+          echo ""
+          echo "▶ CURRENT USER"
+          echo "  whoami: $(whoami)"
+          echo "  id:     $(id)"
+
+          echo ""
+          echo "▶ SUDOERS CONFIG FILES"
+          echo "$SUDO_PASSWORD" | sudo -S ls -la /etc/sudoers.d/ 2>/dev/null | sed 's/^/  /' \
+            || echo "  (could not list)"
+
+          echo ""
+          echo "▶ SUDO CAPABILITIES FOR DEPLOY USER ($SSH_USER)"
+          echo "$SUDO_PASSWORD" | sudo -S sudo -l -U "$SSH_USER" 2>/dev/null | sed 's/^/  /' \
+            || echo "  (could not list)"
+
+          echo ""
+          echo "▶ SSH CONFIGURATION"
+          echo "  sshd active: $(systemctl is-active sshd 2>/dev/null || systemctl is-active ssh 2>/dev/null || echo 'unknown')"
+          echo "$SUDO_PASSWORD" | sudo -S cat /etc/ssh/sshd_config 2>/dev/null \
+            | { grep -E "^(Port|PermitRootLogin|PasswordAuthentication|PubkeyAuthentication|AllowUsers|MaxAuthTries)" || true; } \
+            | sed 's/^/  /' \
+            || echo "  (could not read sshd_config)"
+
+          echo ""
+          echo "▶ AUTHORIZED SSH KEYS"
+          for user_home in /home/*; do
+            user=$(basename "$user_home")
+            if [ -f "$user_home/.ssh/authorized_keys" ]; then
+              KEY_COUNT=$(wc -l < "$user_home/.ssh/authorized_keys" 2>/dev/null || echo "0")
+              echo "  $user: $KEY_COUNT authorized key(s)"
+            fi
+          done
+
+          echo ""
+          echo "▶ FAIL2BAN STATUS"
+          if command -v fail2ban-client >/dev/null 2>&1; then
+            echo "$SUDO_PASSWORD" | sudo -S fail2ban-client status 2>/dev/null | sed 's/^/  /' \
+              || echo "  (could not query fail2ban)"
+          else
+            echo "  fail2ban not installed"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 6 — SYSTEMD SERVICES & CRON JOBS
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "6/12 — Systemd Services & Cron Jobs"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 6/12 — SYSTEMD SERVICES & CRON JOBS               ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ KEY SYSTEMD SERVICES"
+          for svc in docker nginx ssh sshd certbot.timer fail2ban actions.runner.*; do
+            STATUS=$(systemctl is-active "$svc" 2>/dev/null || echo "not found")
+            ENABLED=$(systemctl is-enabled "$svc" 2>/dev/null || echo "-")
+            printf "  %-35s active=%-12s enabled=%s\n" "$svc" "$STATUS" "$ENABLED"
+          done
+
+          echo ""
+          echo "▶ ALL ACTIVE SERVICES (running)"
+          systemctl list-units --type=service --state=running --no-pager 2>/dev/null \
+            | head -30 | sed 's/^/  /'
+
+          echo ""
+          echo "▶ FAILED SYSTEMD UNITS"
+          systemctl --failed --no-pager 2>/dev/null | sed 's/^/  /'
+
+          echo ""
+          echo "▶ ACTIVE TIMERS (scheduled tasks)"
+          systemctl list-timers --all --no-pager 2>/dev/null | sed 's/^/  /'
+
+          echo ""
+          echo "▶ CRON JOBS (all users)"
+          for user in root $(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd); do
+            CRON=$(crontab -l -u "$user" 2>/dev/null | grep -v '^#' | grep -v '^$' || true)
+            if [ -n "$CRON" ]; then
+              echo "  User: $user"
+              echo "$CRON" | sed 's/^/    /'
+            fi
+          done
+
+          echo ""
+          echo "▶ SYSTEM CRON FILES"
+          ls -la /etc/cron.d/ 2>/dev/null | sed 's/^/  /' || echo "  (none)"
+          echo ""
+          echo "  /etc/crontab:"
+          { grep -v '^#' /etc/crontab 2>/dev/null || true; } | { grep -v '^$' || true; } | sed 's/^/  /'
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 7 — DOCKER DAEMON & CONFIGURATION
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "7/12 — Docker Daemon & Configuration"
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 7/12 — DOCKER DAEMON & CONFIGURATION              ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ DOCKER VERSION"
+          docker --version
+          docker compose version 2>/dev/null || echo "  (compose plugin not found)"
+
+          echo ""
+          echo "▶ DOCKER INFO (storage driver, runtime, swarm status)"
+          docker info 2>/dev/null | { grep -E "Storage Driver|Docker Root Dir|Logging Driver|Cgroup|Swarm|Managers|Nodes|Default Runtime|Runtimes|Operating System|Architecture" || true; } \
+            | sed 's/^/  /'
+
+          echo ""
+          echo "▶ DOCKER ROOT DIRECTORY LOCATION"
+          DOCKER_ROOT=$(docker info 2>/dev/null | { grep "Docker Root Dir" || true; } | awk '{print $NF}')
+          echo "  Path: $DOCKER_ROOT"
+          DOCKER_DEV=$(df "$DOCKER_ROOT" 2>/dev/null | tail -1 | awk '{print $1}')
+          DOCKER_MNT=$(df "$DOCKER_ROOT" 2>/dev/null | tail -1 | awk '{print $NF}')
+          echo "  Device: $DOCKER_DEV (mount: $DOCKER_MNT)"
+          if [ "$DOCKER_MNT" = "/" ]; then
+            echo "  ℹ️  Docker data is on SSD root — images/layers consume SSD space."
+          fi
+
+          echo ""
+          echo "▶ DOCKER DAEMON.JSON"
+          if [ -f /etc/docker/daemon.json ]; then
+            cat /etc/docker/daemon.json | sed 's/^/  /'
+          else
+            echo "  (no daemon.json — using defaults)"
+          fi
+
+          echo ""
+          echo "▶ DOCKER SWARM STATUS"
+          SWARM_STATE=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo "unknown")
+          echo "  State: $SWARM_STATE"
+          if [ "$SWARM_STATE" = "active" ]; then
+            docker node ls 2>/dev/null | sed 's/^/  /' || true
+          fi
+
+          echo ""
+          echo "▶ DOCKER SYSTEM DISK USAGE"
+          docker system df
+          echo ""
+          { docker system df -v 2>/dev/null || true; } | head -50 | sed 's/^/  /'
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 8 — COMPLETE DOCKER INVENTORY
+      #   Every image, container, volume, network, service, stack
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "8/12 — Complete Docker Inventory"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 8/12 — COMPLETE DOCKER INVENTORY                  ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          # ── Images ──────────────────────────────────────────────────────────
+          echo ""
+          echo "▶ ALL IMAGES"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}"
+
+          echo ""
+          echo "▶ DANGLING IMAGES"
+          DANGLING=$(docker images -f "dangling=true" -q)
+          if [ -n "$DANGLING" ]; then
+            echo "  ⚠️  Dangling images found:"
+            docker images -f "dangling=true" --format "  {{.ID}} — {{.Size}} (created {{.CreatedSince}})"
+          else
+            echo "  ✅ None."
+          fi
+
+          # ── Containers ──────────────────────────────────────────────────────
+          echo ""
+          echo "▶ ALL CONTAINERS (running + stopped)"
+          docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Size}}"
+
+          echo ""
+          echo "▶ STOPPED / EXITED CONTAINERS"
+          STOPPED=$(docker ps -a --filter "status=exited" --filter "status=dead" -q)
+          if [ -n "$STOPPED" ]; then
+            echo "  ⚠️  Stopped containers:"
+            docker ps -a --filter "status=exited" --filter "status=dead" \
+              --format "  {{.Names}} — {{.Image}} ({{.Status}})"
+          else
+            echo "  ✅ None."
+          fi
+
+          # ── Volumes ─────────────────────────────────────────────────────────
+          echo ""
+          echo "▶ ALL VOLUMES"
+          docker volume ls --format "table {{.Name}}\t{{.Driver}}\t{{.Scope}}"
+
+          DANGLING_VOLS=$(docker volume ls -f dangling=true -q)
+          if [ -n "$DANGLING_VOLS" ]; then
+            echo "  ⚠️  Dangling volumes:"
+            echo "$DANGLING_VOLS" | sed 's/^/    /'
+          else
+            echo "  ✅ No dangling volumes."
+          fi
+
+          # ── Networks ────────────────────────────────────────────────────────
+          echo ""
+          echo "▶ ALL NETWORKS"
+          docker network ls --format "table {{.Name}}\t{{.Driver}}\t{{.Scope}}\t{{.ID}}"
+
+          echo ""
+          echo "▶ NETWORK → CONTAINER MAPPING"
+          for net in $(docker network ls --format "{{.Name}}" | { grep -vE "^(bridge|host|none)$" || true; }); do
+            MEMBERS=$(docker network inspect "$net" \
+              --format '{{range $k,$v := .Containers}}{{$v.Name}} {{end}}' 2>/dev/null || true)
+            if [ -n "$MEMBERS" ]; then
+              echo "  $net: $MEMBERS"
+            else
+              echo "  $net: (empty — no containers)"
+            fi
+          done
+
+          # ── Swarm Stacks & Services ─────────────────────────────────────────
+          echo ""
+          echo "▶ DOCKER STACKS"
+          docker stack ls 2>/dev/null || echo "  (Swarm not active)"
+
+          echo ""
+          echo "▶ ALL SWARM SERVICES"
+          docker service ls --format "table {{.Name}}\t{{.Image}}\t{{.Replicas}}\t{{.Ports}}" \
+            2>/dev/null || echo "  (Swarm not active)"
+
+          echo ""
+          echo "▶ SWARM SERVICE DETAILS (per stack)"
+          ALL_STACKS=$(docker stack ls --format "{{.Name}}" 2>/dev/null || true)
+          for stack in $ALL_STACKS; do
+            echo "  ┌─ Stack: $stack"
+            docker stack services "$stack" \
+              --format "  │  {{.Name}}\t{{.Image}}\t{{.Replicas}}\tPorts={{.Ports}}" 2>/dev/null || true
+            echo "  └─"
+          done
+
+          echo ""
+          echo "▶ SWARM TASK STATUS (all stacks)"
+          for stack in $ALL_STACKS; do
+            echo ""
+            echo "  Stack: $stack"
+            docker stack ps "$stack" --no-trunc 2>/dev/null | head -20 | sed 's/^/  /' || true
+          done
+
+          # ── Container bind-mounts ───────────────────────────────────────────
+          echo ""
+          echo "▶ CONTAINER BIND-MOUNT MAP (what host paths are used)"
+          echo "  ─── This tells other repos which paths are already CLAIMED ───"
+          for cname in $(docker ps --format "{{.Names}}" 2>/dev/null); do
+            MOUNTS=$(docker inspect "$cname" \
+              --format '{{range .Mounts}}{{.Type}} {{.Source}} → {{.Destination}}; {{end}}' 2>/dev/null || true)
+            if [ -n "$MOUNTS" ]; then
+              echo "  $cname:"
+              echo "    $MOUNTS"
+            fi
+          done
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 9 — DEPLOYED APPLICATIONS REGISTRY
+      #   What applications are deployed, at what ports, with what domains
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "9/12 — Deployed Applications Registry"
+        env:
+          REMOTE_PATH: ${{ secrets.REMOTE_PATH }}
+          APP_DOMAIN:  ${{ secrets.APP_DOMAIN }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 9/12 — DEPLOYED APPLICATIONS REGISTRY             ║"
+          echo "║  Purpose: what's deployed, at what port, with what domain   ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          # ── Simama ──────────────────────────────────────────────────────────
+          echo ""
+          echo "▶ SIMAMA (core application)"
+          echo "  Port     : 8010"
+          echo "  Domain   : ${APP_DOMAIN:-unknown}"
+          echo "  Deploy   : $REMOTE_PATH"
+          echo "  DB data  : $SIMAMA_DB_DATA_DIR"
+          echo "  Storage  : $SIMAMA_STORAGE_DIR"
+          echo "  Stack    : simama"
+          if docker service ls --format '{{.Name}}' 2>/dev/null | grep -q "^simama_"; then
+            echo "  Status   : ✅ RUNNING"
+            docker service ls --format "    {{.Name}}\t{{.Replicas}}\t{{.Ports}}" 2>/dev/null \
+              | grep "simama_" || true
+          else
+            echo "  Status   : ❌ NOT RUNNING"
+          fi
+
+          # ── Madeena CP ──────────────────────────────────────────────────────
+          echo ""
+          echo "▶ MADEENA CP (company profile)"
+          echo "  Port     : 8011"
+          echo "  DB data  : $MADEENA_CP_DB_DATA_DIR"
+          echo "  Storage  : $MADEENA_CP_STORAGE_DIR"
+          echo "  Stack    : madeena_cp"
+          if docker service ls --format '{{.Name}}' 2>/dev/null | grep -q "^madeena_cp_"; then
+            echo "  Status   : ✅ RUNNING"
+            docker service ls --format "    {{.Name}}\t{{.Replicas}}\t{{.Ports}}" 2>/dev/null \
+              | grep "madeena_cp_" || true
+          else
+            echo "  Status   : ❌ NOT RUNNING"
+          fi
+
+          # ── Other deployed stacks ───────────────────────────────────────────
+          echo ""
+          echo "▶ OTHER DEPLOYED APPLICATIONS"
+          OTHER_STACKS=$(docker stack ls --format "{{.Name}}" 2>/dev/null \
+            | grep -vE "^(simama|madeena_cp)$" || true)
+          if [ -n "$OTHER_STACKS" ]; then
+            for stack in $OTHER_STACKS; do
+              echo ""
+              echo "  Stack: $stack"
+              docker stack services "$stack" \
+                --format "    {{.Name}}\t{{.Replicas}}\t{{.Ports}}" 2>/dev/null || true
+            done
+          else
+            echo "  (no other stacks — simama is the only deployed application)"
+          fi
+
+          # ── docker-compose files on disk ────────────────────────────────────
+          echo ""
+          echo "▶ DOCKER-COMPOSE FILES FOUND ON SERVER"
+          echo "  ─── These indicate where deployments are configured ───"
+          { find /home /opt /srv /var/www "${REMOTE_PATH}" "${HDD_MOUNT}" \
+            -maxdepth 4 \( -name "docker-compose*.yml" -o -name "docker-compose*.yaml" \) \
+            2>/dev/null || true; } | sort -u | sed 's/^/  /'
+
+          # ── .env files on disk (keys only — no secrets) ─────────────────────
+          echo ""
+          echo "▶ ENVIRONMENT FILES (.env) — KEYS ONLY (secrets redacted)"
+          for env_file in $({ find "$REMOTE_PATH" /home /opt /srv \
+            -maxdepth 4 -name ".env" -type f 2>/dev/null || true; } | head -10); do
+            echo ""
+            echo "  File: $env_file"
+            # Print only the KEY names, not values
+            { grep -v '^#' "$env_file" 2>/dev/null || true; } | { grep -v '^$' || true; } \
+              | sed 's/=.*/=***/' | sed 's/^/    /'
+          done
+
+          # ── Nginx server_name → port mapping ───────────────────────────────
+          echo ""
+          echo "▶ NGINX DOMAIN → PORT ROUTING MAP"
+          echo "$SUDO_PASSWORD" | sudo -S nginx -T 2>/dev/null \
+            | { awk '/server_name|proxy_pass|listen / { print }' || true; } \
+            | sed 's/^/  /'
+          echo "$SUDO_PASSWORD" | sudo -S nginx -T >/dev/null 2>&1 \
+            || echo "  (could not read nginx config)"
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 10 — NGINX FULL AUDIT
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "10/12 — Nginx Full Audit"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          APP_DOMAIN:    ${{ secrets.APP_DOMAIN }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 10/12 — NGINX FULL AUDIT                          ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          # ── Host Nginx ──────────────────────────────────────────────────────
+          echo ""
+          echo "▶ HOST NGINX STATUS"
+          if systemctl is-active --quiet nginx 2>/dev/null; then
+            echo "  ✅ Active."
+            echo "$SUDO_PASSWORD" | sudo -S nginx -t 2>&1 | sed 's/^/  /'
+          else
+            echo "  ℹ️  Host nginx is not running."
+          fi
+
+          echo ""
+          echo "▶ ENABLED SITES"
+          echo "$SUDO_PASSWORD" | sudo -S ls -la /etc/nginx/sites-enabled/ 2>/dev/null \
+            | sed 's/^/  /' || echo "  (not applicable)"
+
+          echo ""
+          echo "▶ HOST NGINX FULL CONFIG (key directives)"
+          echo "$SUDO_PASSWORD" | sudo -S nginx -T 2>/dev/null \
+            | { grep -E "server_name|listen|proxy_pass|ssl_certificate|return|upstream|root |index " || true; } \
+            | sed 's/^/  /'
+
+          # ── Simama container Nginx ──────────────────────────────────────────
+          echo ""
+          echo "▶ SIMAMA_NGINX CONTAINER"
+          NGINX_CONTAINER=$(docker ps -q -f name=simama_nginx | head -n 1)
+          if [ -z "$NGINX_CONTAINER" ]; then
+            echo "  ❌ No running simama_nginx container."
+          else
+            echo "  ✅ Container: $NGINX_CONTAINER"
+            echo ""
+            echo "  Config test:"
+            docker exec "$NGINX_CONTAINER" nginx -t 2>&1 | sed 's/^/    /'
+
+            echo ""
+            echo "  Full active config:"
+            docker exec "$NGINX_CONTAINER" nginx -T 2>/dev/null \
+              | { grep -E "server_name|listen|root|fastcgi_pass|try_files|return|index " || true; } \
+              | sed 's/^/    /'
+          fi
+
+          # ── Madeena CP container Nginx ──────────────────────────────────────
+          echo ""
+          echo "▶ MADEENA_CP_NGINX CONTAINER"
+          CP_NGINX_CONTAINER=$(docker ps -q -f name=madeena_cp_nginx | head -n 1)
+          if [ -z "$CP_NGINX_CONTAINER" ]; then
+            echo "  ❌ No running madeena_cp_nginx container."
+          else
+            echo "  ✅ Container: $CP_NGINX_CONTAINER"
+            echo ""
+            echo "  Config test:"
+            docker exec "$CP_NGINX_CONTAINER" nginx -t 2>&1 | sed 's/^/    /'
+
+            echo ""
+            echo "  Full active config:"
+            docker exec "$CP_NGINX_CONTAINER" nginx -T 2>/dev/null \
+              | { grep -E "server_name|listen|root|fastcgi_pass|try_files|return|index " || true; } \
+              | sed 's/^/    /'
+          fi
+
+          # ── Health probes ───────────────────────────────────────────────────
+          echo ""
+          echo "▶ HTTP HEALTH PROBES"
+          STATUS_INT=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
+            http://127.0.0.1:8010 2>/dev/null || echo "000")
+          echo "  Simama (http://127.0.0.1:8010) → HTTP $STATUS_INT"
+          if echo "$STATUS_INT" | grep -qE "^(200|301|302|307|308)$"; then
+            echo "    ✅"
+          else
+            echo "    ❌ Expected 2xx/3xx"
+          fi
+
+          STATUS_CP=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
+            http://127.0.0.1:8011 2>/dev/null || echo "000")
+          echo "  Madeena CP (http://127.0.0.1:8011) → HTTP $STATUS_CP"
+          if echo "$STATUS_CP" | grep -qE "^(200|301|302|307|308)$"; then
+            echo "    ✅"
+          else
+            echo "    ❌ Expected 2xx/3xx"
+          fi
+
+          if [ -n "${APP_DOMAIN:-}" ]; then
+            STATUS_EXT=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 \
+              "https://$APP_DOMAIN" 2>/dev/null || echo "000")
+            echo "  https://$APP_DOMAIN → HTTP $STATUS_EXT"
+            if echo "$STATUS_EXT" | grep -qE "^(200|301|302|307|308)$"; then
+              echo "    ✅"
+            else
+              echo "    ⚠️"
+            fi
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 11 — DATABASE SECURITY & HEALTH  ★ TOP PRIORITY ★
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "11/12 — Database Security & Health (★ TOP PRIORITY)"
+        env:
+          DB_DATABASE:      ${{ secrets.DB_DATABASE }}
+          DB_USERNAME:      ${{ secrets.DB_USERNAME }}
+          DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          SUDO_PASSWORD:    ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+          PASS=true
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 11/12 — DATABASE SECURITY & HEALTH                ║"
+          echo "║  ★★★ TOP PRIORITY — Database Security                      ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          DBS=(
+            "simama_db|${DB_DATABASE}|${DB_USERNAME}|${SIMAMA_DB_DATA_DIR}|${SIMAMA_BACKUP_DIR}"
+            "madeena_cp_db|madeena_cp|${DB_USERNAME}|${MADEENA_CP_DB_DATA_DIR}|${MADEENA_CP_BACKUP_DIR}"
+          )
+
+          _sudo_cmd() { echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null; }
+
+          for db_info in "${DBS[@]}"; do
+            IFS='|' read -r DB_CONTAINER DB_DATABASE DB_USERNAME DB_DATA_DIR BACKUP_DIR <<< "$db_info"
+            
+            echo ""
+            echo "======================================================================"
+            echo "▶ AUDITING DATABASE: $DB_DATABASE (Container: $DB_CONTAINER)"
+            echo "======================================================================"
+
+            db_query() {
+              # Use MYSQL_PWD so the password is NOT visible in `ps aux`
+              local _cid
+              _cid=$(docker ps -q -f name="${DB_CONTAINER}" | head -n 1)
+              docker exec -e MYSQL_PWD="${DB_ROOT_PASSWORD}" \
+                "${_cid}" \
+                mysql -u root --batch --silent -e "$1" 2>/dev/null
+            }
+
+            CONTAINER_ID=$(docker ps -q -f name=$DB_CONTAINER | head -n 1)
+
+            if [ -z "$CONTAINER_ID" ]; then
+              echo "❌ CRITICAL: No running $DB_CONTAINER container!"
+              echo "   Data files should still exist on SSD — checking below..."
+              PASS=false
+            else
+              echo "  ✅ DB container: $CONTAINER_ID"
+
+              # ── Connectivity ─────────────────────────────────────────────────
+              echo ""
+              echo "  ▶ ROOT CONNECTIVITY"
+              if db_query "SELECT 'OK';" 2>/dev/null | grep -q "OK"; then
+                echo "    ✅ MySQL root login OK."
+              else
+                echo "    ❌ Cannot connect as root!"
+                PASS=false
+              fi
+
+              # ── Database size ────────────────────────────────────────────────
+              echo ""
+              echo "  ▶ DATABASE SIZE ($DB_DATABASE)"
+              DB_SIZE=$(db_query \
+                "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2)
+                 FROM information_schema.TABLES
+                 WHERE table_schema = '${DB_DATABASE}';" | tail -1)
+              if [ -n "$DB_SIZE" ] && [ "$DB_SIZE" != "NULL" ]; then
+                echo "    ✅ '$DB_DATABASE' exists — size: ${DB_SIZE} MB"
+              else
+                echo "    ⚠️  '$DB_DATABASE' empty or does not exist."
+                PASS=false
+              fi
+
+              # ── Table inventory ──────────────────────────────────────────────
+              echo ""
+              echo "  ▶ TABLE INVENTORY"
+              db_query "
+                SELECT TABLE_NAME,
+                       TABLE_ROWS,
+                       ROUND((data_length + index_length) / 1024, 1) AS size_kb,
+                       ENGINE,
+                       CREATE_TIME
+                FROM information_schema.TABLES
+                WHERE table_schema = '${DB_DATABASE}'
+                ORDER BY (data_length + index_length) DESC;
+              " | column -t 2>/dev/null | sed 's/^/    /' || echo "    (could not list tables)"
+
+              # ── User privileges ──────────────────────────────────────────────
+              echo ""
+              echo "  ▶ APP USER GRANTS ($DB_USERNAME)"
+              docker exec \
+                "$CONTAINER_ID" \
+                mysql -u root -p"${DB_ROOT_PASSWORD}" \
+                --batch --silent \
+                -e "SHOW GRANTS FOR '${DB_USERNAME}'@'%';" \
+                2>/dev/null | sed 's/^/      /' || echo "      (user not found)"
+
+              SUPER_GRANTED=$(db_query \
+                "SELECT COUNT(*) FROM mysql.user
+                 WHERE User='${DB_USERNAME}' AND Super_priv='Y';" \
+                2>/dev/null | tail -1 || echo "0")
+              if [ "$SUPER_GRANTED" = "0" ]; then
+                echo "    ✅ App user does NOT have SUPER privilege."
+              else
+                echo "    ⚠️  App user has SUPER — revoke for least-privilege."
+              fi
+
+              # ── Anonymous users ──────────────────────────────────────────────
+              ANON=$(db_query \
+                "SELECT User, Host FROM mysql.user WHERE User='';" \
+                2>/dev/null || true)
+              if [ -n "$ANON" ]; then
+                echo "    ❌ Anonymous users found — drop them!"
+                echo "$ANON" | sed 's/^/      /'
+                PASS=false
+              fi
+
+              # ── Binary logging ───────────────────────────────────────────────
+              echo ""
+              echo "  ▶ BINARY LOGGING (point-in-time recovery)"
+              BINLOG=$(db_query "SHOW VARIABLES LIKE 'log_bin';" 2>/dev/null \
+                | awk '{print $2}' || echo "UNKNOWN")
+              echo "    log_bin: $BINLOG"
+              if [ "$BINLOG" = "ON" ]; then
+                echo "    ✅ Point-in-time recovery possible."
+              else
+                echo "    ⚠️  Binary logging OFF — only full-dump recovery."
+              fi
+
+              # ── Backup check ─────────────────────────────────────────────────
+              echo ""
+              echo "  ▶ BACKUP FILES"
+              BACKUP_FOUND=false
+              if [ -d "$BACKUP_DIR" ] || _sudo_cmd test -d "$BACKUP_DIR" 2>/dev/null; then
+                FILES=$({ find "$BACKUP_DIR" -name "*.sql*" -type f 2>/dev/null || \
+                  _sudo_cmd find "$BACKUP_DIR" -name "*.sql*" -type f 2>/dev/null || true; } | head -5)
+                if [ -n "$FILES" ]; then
+                  echo "    ✅ Backups in $BACKUP_DIR:"
+                  echo "$FILES" | while read f; do
+                    SIZE=$(du -sh "$f" 2>/dev/null | awk '{print $1}' || echo "?")
+                    DATE=$(stat -c "%y" "$f" 2>/dev/null | cut -d. -f1 || echo "?")
+                    echo "      $f ($SIZE, $DATE)"
+                  done
+                  BACKUP_FOUND=true
+                fi
+              fi
+              if [ "$BACKUP_FOUND" = "false" ]; then
+                echo "    ❌ No backup files found in $BACKUP_DIR!"
+              fi
+            fi
+
+            # ── Raw physical files (works even if container is down) ────────────
+            echo ""
+            echo "  ▶ RAW DB FILES ($DB_DATA_DIR)"
+            DB_SUBDIR_EXISTS=false
+            if [ -d "$DB_DATA_DIR/$DB_DATABASE" ] || _sudo_cmd test -d "$DB_DATA_DIR/$DB_DATABASE" 2>/dev/null; then
+              DB_SUBDIR_EXISTS=true
+              FILE_COUNT=$(_sudo_cmd find "$DB_DATA_DIR/$DB_DATABASE" -type f 2>/dev/null | wc -l || echo "?")
+              TOTAL_SIZE=$(_sudo_cmd du -sh "$DB_DATA_DIR/$DB_DATABASE" 2>/dev/null | awk '{print $1}' || echo "?")
+              echo "    ✅ DB directory: $DB_DATA_DIR/$DB_DATABASE"
+              echo "       Files: $FILE_COUNT | Size: $TOTAL_SIZE"
+
+              # ── SSD/HDD boundary check — authoritative device comparison ──────
+              # Compare block devices: if DB device == HDD device → VIOLATION
+              DB_DEV=$(_sudo_cmd df --output=source "$DB_DATA_DIR" 2>/dev/null | tail -1 || true)
+              if mountpoint -q "$HDD_MOUNT" 2>/dev/null; then
+                HDD_DEV=$(_sudo_cmd df --output=source "$HDD_MOUNT" 2>/dev/null | tail -1 || true)
+              else
+                HDD_DEV=""
+              fi
+
+              if [ -n "$DB_DEV" ] && [ -n "$HDD_DEV" ]; then
+                if [ "$DB_DEV" = "$HDD_DEV" ]; then
+                  echo "    ❌ CRITICAL: DB files on HDD device ($DB_DEV)! Must be on SSD."
+                  PASS=false
+                else
+                  echo "    ✅ Confirmed: DB on SSD device ($DB_DEV), HDD device is ($HDD_DEV)."
+                fi
+              else
+                # Fallback: mount-point prefix — use $HDD_MOUNT for precision
+                DB_MNT=$(_sudo_cmd df "$DB_DATA_DIR" 2>/dev/null | tail -1 | awk '{print $NF}' || echo "")
+                if [ -n "$DB_MNT" ] && echo "$DB_MNT" | grep -q "^${HDD_MOUNT}"; then
+                  echo "    ❌ CRITICAL (fallback): DB path is under HDD mount ($DB_MNT)."
+                  PASS=false
+                else
+                  echo "    ✅ Confirmed (fallback): DB is not under HDD mount ($DB_MNT)."
+                fi
+              fi
+            fi
+            if [ "$DB_SUBDIR_EXISTS" = "false" ]; then
+              if [ -d "$DB_DATA_DIR" ] || _sudo_cmd test -d "$DB_DATA_DIR" 2>/dev/null; then
+                echo "    ⚠️  MySQL data dir exists but '$DB_DATABASE' subdirectory missing."
+              else
+                echo "    ❌ $DB_DATA_DIR not found!"
+                PASS=false
+              fi
+            fi
+          done
+
+          # Write structured status to shared file for the summary step
+          mkdir -p /tmp
+          {
+            echo "DB_AUDIT_PASS=${PASS}"
+          } >> /tmp/audit_status.env
+
+          echo ""
+          if [ "$PASS" = "true" ]; then
+            echo "✅ ALL DATABASE AUDITS PASSED."
+          else
+            echo "❌ DATABASE AUDIT FAILED — fix before next deployment!"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SECTION 11b — VOLUME MOUNT TOPOLOGY VALIDATION
+      #   Asserts that each app's DB named volume is bound to the SSD, not HDD.
+      #   Inspects the running Docker volume's 'device' option and compares
+      #   block devices — no reliance on path-prefix string matching.
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "11b — Volume Mount Topology Validation (DB on SSD)"
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+          VOL_PASS=true
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 11b — VOLUME MOUNT TOPOLOGY VALIDATION            ║"
+          echo "║  Rule: DB named volume must bind to SSD, never HDD         ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          _sudo_cmd() { echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null; }
+
+          # ── HDD block device (reference point) ──────────────────────────
+          if mountpoint -q "${HDD_MOUNT}" 2>/dev/null; then
+            HDD_DEV=$(df --output=source "${HDD_MOUNT}" 2>/dev/null | tail -1 || true)
+            echo "  HDD reference device : ${HDD_DEV} (mounted at ${HDD_MOUNT})"
+          else
+            HDD_DEV=""
+            echo "  ⚠️  HDD not mounted at ${HDD_MOUNT} — skipping HDD device reference."
+          fi
+
+          # ── Volumes to check: name → expected location ───────────────────
+          # Format: "<volume_name>|<stack_prefix>|SSD|<expected_path_hint>"
+          VOLUMES=(
+            "simama_db_data|simama|SSD|${SIMAMA_DB_DATA_DIR}"
+            "madeena_cp_db_data|madeena_cp|SSD|${MADEENA_CP_DB_DATA_DIR}"
+          )
+
+          for vol_info in "${VOLUMES[@]}"; do
+            IFS='|' read -r VOL_NAME STACK EXPECTED_DISK HINT_PATH <<< "${vol_info}"
+
+            echo ""
+            echo "  ┌─ Volume: ${VOL_NAME}  (stack: ${STACK})"
+
+            # Resolve actual volume name — Swarm prefixes stack name
+            ACTUAL_VOL=$(docker volume ls --format '{{.Name}}' 2>/dev/null \
+              | grep -E "^(${STACK}_)?${VOL_NAME}$" | head -1 || true)
+
+            if [ -z "${ACTUAL_VOL}" ]; then
+              echo "  │  ⚠️  Volume not found (stack not deployed or name differs)."
+              echo "  │     Expected one of: ${VOL_NAME} / ${STACK}_${VOL_NAME}"
+              echo "  └─"
+              continue
+            fi
+
+            echo "  │  Found volume : ${ACTUAL_VOL}"
+
+            # Get the host bind path from volume options.device
+            VOL_DEVICE_PATH=$(docker volume inspect "${ACTUAL_VOL}" \
+              --format '{{.Options.device}}' 2>/dev/null || true)
+
+            if [ -z "${VOL_DEVICE_PATH}" ]; then
+              # Fallback: volume may use a default Docker-managed path
+              VOL_DEVICE_PATH=$(docker volume inspect "${ACTUAL_VOL}" \
+                --format '{{.Mountpoint}}' 2>/dev/null || true)
+              echo "  │  Mountpoint   : ${VOL_DEVICE_PATH} (Docker-managed path)"
+            else
+              echo "  │  Bind device  : ${VOL_DEVICE_PATH}"
+            fi
+
+            if [ -z "${VOL_DEVICE_PATH}" ]; then
+              echo "  │  ❌ Could not resolve volume path — manual check required."
+              VOL_PASS=false
+              echo "  └─"
+              continue
+            fi
+
+            # ── Block device comparison ─────────────────────────────────
+            VOL_BLOCK_DEV=$(df --output=source "${VOL_DEVICE_PATH}" 2>/dev/null \
+              | tail -1 || true)
+
+            if [ -z "${VOL_BLOCK_DEV}" ]; then
+              # Path may not exist yet if stack is not deployed; try sudo
+              VOL_BLOCK_DEV=$(_sudo_cmd df --output=source "${VOL_DEVICE_PATH}" 2>/dev/null \
+                | tail -1 || true)
+            fi
+
+            VOL_MOUNT=$(df --output=target "${VOL_DEVICE_PATH}" 2>/dev/null \
+              | tail -1 || \
+              _sudo_cmd df --output=target "${VOL_DEVICE_PATH}" 2>/dev/null \
+              | tail -1 || echo "unknown")
+
+            echo "  │  Block device : ${VOL_BLOCK_DEV:-unknown}"
+            echo "  │  Mount point  : ${VOL_MOUNT}"
+
+            if [ -n "${VOL_BLOCK_DEV}" ] && [ -n "${HDD_DEV}" ]; then
+              if [ "${VOL_BLOCK_DEV}" = "${HDD_DEV}" ]; then
+                echo "  │  ❌ CRITICAL: DB volume is on the HDD device!"
+                echo "  │     Volume path : ${VOL_DEVICE_PATH}"
+                echo "  │     Block dev   : ${VOL_BLOCK_DEV} (same as HDD ${HDD_DEV})"
+                echo "  │     ACTION: Move ${HINT_PATH} to SSD before next deploy."
+                VOL_PASS=false
+              else
+                echo "  │  ✅ SAFE: DB volume is on SSD (${VOL_BLOCK_DEV}), HDD is (${HDD_DEV})."
+              fi
+            else
+              # Fallback: path-prefix check using $HDD_MOUNT
+              if echo "${VOL_DEVICE_PATH}" | grep -q "^${HDD_MOUNT}"; then
+                echo "  │  ❌ CRITICAL (fallback): DB volume path is under HDD mount!"
+                echo "  │     Path: ${VOL_DEVICE_PATH}"
+                VOL_PASS=false
+              else
+                echo "  │  ✅ SAFE (fallback): DB volume path is not under HDD mount."
+              fi
+            fi
+
+            echo "  └─"
+          done
+
+          echo ""
+          if [ "${VOL_PASS}" = "true" ]; then
+            echo "✅ ALL VOLUME TOPOLOGY CHECKS PASSED — DB volumes are on SSD."
+          else
+            echo "❌ VOLUME TOPOLOGY VIOLATION — DB volume(s) are on HDD! Fix immediately."
+          fi
+
+          # Persist result for summary step
+          mkdir -p /tmp
+          echo "VOL_TOPOLOGY_PASS=${VOL_PASS}" >> /tmp/audit_status.env
+
+      # SECTION 12 — RESOURCE USAGE & CAPACITY
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "12/12 — Resource Usage & Capacity"
+        run: |
+          set -euo pipefail
+          exec 1> >(tee -a "/tmp/full_audit.log") 2>&1
+
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  SECTION 12/12 — RESOURCE USAGE & CAPACITY                 ║"
+          echo "║  Purpose: help AI agents know what resources are available  ║"
+          echo "║           before writing infrastructure for new projects    ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          echo ""
+          echo "▶ CPU USAGE (current)"
+          top -bn1 | head -5 | sed 's/^/  /'
+
+          echo ""
+          echo "▶ MEMORY USAGE"
+          free -h
+          echo ""
+          echo "  Available for new containers: $(free -h | awk '/^Mem/ {print $7}')"
+
+          echo ""
+          echo "▶ DOCKER CONTAINER RESOURCE USAGE (live snapshot)"
+          docker stats --no-stream \
+            --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}" \
+            2>/dev/null || echo "  (no running containers)"
+
+          echo ""
+          echo "▶ TOP 15 PROCESSES BY MEMORY"
+          ps aux --sort=-%mem | head -16 | sed 's/^/  /'
+
+          echo ""
+          echo "▶ DISK CAPACITY SUMMARY FOR AI AGENTS"
+          echo "  ┌─────────────────────────────────────────────────────────┐"
+          SSD_TOTAL=$(df -h "/" | tail -1 | awk '{print $2}')
+          SSD_FREE=$(df -h "/" | tail -1 | awk '{print $4}')
+          SSD_PCT=$(df "/" | tail -1 | awk '{print $5}')
+          echo "  │ SSD (/)           : ${SSD_TOTAL} total, ${SSD_FREE} free (${SSD_PCT} used)"
+          HDD_TOTAL=$(df -h "$HDD_MOUNT" 2>/dev/null | tail -1 | awk '{print $2}' || echo "N/A")
+          HDD_FREE=$(df -h "$HDD_MOUNT" 2>/dev/null | tail -1 | awk '{print $4}' || echo "N/A")
+          HDD_PCT=$(df "$HDD_MOUNT" 2>/dev/null | tail -1 | awk '{print $5}' || echo "N/A")
+          echo "  │ HDD ($HDD_MOUNT) : ${HDD_TOTAL} total, ${HDD_FREE} free (${HDD_PCT} used)"
+          DOCKER_IMAGES_SIZE=$(docker system df --format '{{.Size}}' 2>/dev/null | head -1 || echo "?")
+          DOCKER_CONTAINERS_SIZE=$(docker system df --format '{{.Size}}' 2>/dev/null | sed -n '2p' || echo "?")
+          DOCKER_VOLUMES_SIZE=$(docker system df --format '{{.Size}}' 2>/dev/null | sed -n '3p' || echo "?")
+          echo "  │ Docker images     : $DOCKER_IMAGES_SIZE"
+          echo "  │ Docker containers : $DOCKER_CONTAINERS_SIZE"
+          echo "  │ Docker volumes    : $DOCKER_VOLUMES_SIZE"
+          RAM_TOTAL=$(free -h | awk '/^Mem/ {print $2}')
+          RAM_AVAIL=$(free -h | awk '/^Mem/ {print $7}')
+          echo "  │ RAM               : ${RAM_TOTAL} total, ${RAM_AVAIL} available"
+          echo "  │ CPUs              : $(nproc) logical"
+          echo "  └─────────────────────────────────────────────────────────┘"
+
+          echo ""
+          echo "▶ CLAIMED RESOURCES BY SIMAMA"
+          echo "  Port  : 8010"
+          echo "  Stack : simama (simama_app, simama_nginx, simama_db)"
+          echo "  DB dir: $SIMAMA_DB_DATA_DIR (on SSD)"
+          echo "  Storage: $SIMAMA_STORAGE_DIR (on HDD)"
+          echo "  Deploy : \$REMOTE_PATH"
+
+          echo ""
+          echo "▶ CLAIMED RESOURCES BY MADEENA CP"
+          echo "  Port  : 8011"
+          echo "  Stack : madeena_cp (madeena_cp_app, madeena_cp_nginx, madeena_cp_db)"
+          echo "  DB dir: $MADEENA_CP_DB_DATA_DIR (on SSD)"
+          echo "  Storage: $MADEENA_CP_STORAGE_DIR (on HDD)"
+
+          echo ""
+          echo "▶ FREE RESOURCES FOR NEW PROJECTS"
+          echo "  ─── AI agents: use this section when planning new deployments ───"
+          echo "  Free ports (from common range):"
+          for port in 8000 8001 8002 8003 8004 8005 8020 8030 8040 8050 9000 9001; do
+            if ! ss -ltn 2>/dev/null | grep -q ":$port "; then
+              echo "    $port: ⚪ FREE"
+            fi
+          done
+          echo ""
+          echo "  HDD free space: ${HDD_FREE:-N/A} (for DB + file storage)"
+          echo "  SSD free space: ${SSD_FREE} (for Docker images + OS)"
+          echo "  RAM available : ${RAM_AVAIL}"
+
+      # ════════════════════════════════════════════════════════════════════════
+      # FINAL SUMMARY
+      # ════════════════════════════════════════════════════════════════════════
+      - name: "AUDIT COMPLETE — SUMMARY"
+        if: always()
+        run: |
+          TIMESTAMP=$(date -u +'%Y%m%d-%H%M')
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          FILENAME="audit-${{ github.actor }}-${SHA_SHORT}-${TIMESTAMP}Z.log"
+
+          # Load structured status flags written by earlier steps
+          # shellcheck source=/dev/null
+          [ -f /tmp/audit_status.env ] && source /tmp/audit_status.env || true
+
+          # Determine badges
+          SSD_PCT_NUM=$(df "/" | tail -1 | awk '{print $5}' | tr -d '%')
+          [ -n "$SSD_PCT_NUM" ] && [ "$SSD_PCT_NUM" -gt 80 ] \
+            && SSD_STATUS="⚠️ ${SSD_PCT_NUM}% used" || SSD_STATUS="✅ ${SSD_PCT_NUM}% used"
+
+          if mountpoint -q "${HDD_MOUNT}" 2>/dev/null; then
+            HDD_STATUS="✅ Mounted"
+          else
+            HDD_STATUS="❌ NOT MOUNTED"
+          fi
+
+          SIMAMA_STATUS=$(docker service ls --format '{{.Name}}' 2>/dev/null \
+            | grep -q '^simama_' && echo '✅ Running' || echo '❌ Not running')
+          MADEENA_STATUS=$(docker service ls --format '{{.Name}}' 2>/dev/null \
+            | grep -q '^madeena_cp_' && echo '✅ Running' || echo '❌ Not running')
+
+          [ "${DB_AUDIT_PASS:-true}" = "true" ] \
+            && DB_STATUS="✅ All checks passed" || DB_STATUS="❌ Issues detected"
+
+          [ "${VOL_TOPOLOGY_PASS:-true}" = "true" ] \
+            && VOL_STATUS="✅ DB volumes on SSD" || VOL_STATUS="❌ DB volume on HDD — CRITICAL"
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║  FULL SERVER AUDIT COMPLETE                                 ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║  Triggered : $(date -u +'%Y-%m-%d %H:%M:%S UTC')           ║"
+          echo "║  Actor     : ${{ github.actor }}                            ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+
+          {
+            echo "# 🖥️ Full Server Audit — ${{ github.actor }} @ $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "## 📋 Audit Status"
+            echo ""
+            echo "| Check | Status |"
+            echo "|---|---|"
+            echo "| SSD Usage (/) | ${SSD_STATUS} |"
+            echo "| HDD Mount (${HDD_MOUNT}) | ${HDD_STATUS} |"
+            echo "| Simama stack | ${SIMAMA_STATUS} |"
+            echo "| Madeena CP stack | ${MADEENA_STATUS} |"
+            echo "| Database security audit | ${DB_STATUS} |"
+            echo "| DB volume on SSD (topology) | ${VOL_STATUS} |"
+            echo ""
+            echo "## 📄 Run Metadata"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Log filename | \`${FILENAME}\` |"
+            echo "| Run number | ${{ github.run_number }} |"
+            echo "| Run ID | [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo "| Ref | \`${{ github.ref_name }}\` |"
+            echo "| Actor | ${{ github.actor }} |"
+            echo ""
+            echo "## 📑 How to Use This Report"
+            echo ""
+            echo "Copy the full log below and paste it into any AI agent before"
+            echo "writing a new \`deploy-swarm.yml\`, \`docker-compose.yml\`, or infra file."
+            echo "The agent will know: claimed ports/paths/domains, available resources,"
+            echo "DB/storage constraints, and how to avoid breaking existing projects."
+            echo ""
+            echo "## 📃 Full Audit Log"
+            echo ""
+            echo '```text'
+            cat /tmp/full_audit.log 2>/dev/null || echo "(No log captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Cleanup shared status file
+          rm -f /tmp/audit_status.env /tmp/full_audit.log || true

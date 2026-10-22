@@ -1,0 +1,219 @@
+name: "Server — Manage UFW Firewall Rules"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Madeena Standard CI/CD — Secure UFW Firewall Management
+#
+# This workflow allows secure management of UFW (Uncomplicated Firewall) rules
+# directly from the GitHub Actions UI.
+#
+# RUNNER: Must run on 'self-hosted' (targets the production server directly).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Select firewall action to execute'
+        type: choice
+        required: true
+        default: 'status'
+        options:
+          - 'status'
+          - 'enable'
+          - 'disable'
+          - 'allow'
+          - 'deny'
+          - 'delete_rule'
+      port:
+        description: 'Port number or range (required for allow/deny/delete, e.g. 9000, 9001, 80, 443)'
+        type: string
+        required: false
+        default: ''
+      protocol:
+        description: 'Protocol to apply (tcp, udp, or any)'
+        type: choice
+        required: true
+        default: 'tcp'
+        options:
+          - 'tcp'
+          - 'udp'
+          - 'any'
+      from_ip:
+        description: 'Restrict access to specific source IP / subnet (e.g. any, 192.168.1.0/24)'
+        type: string
+        required: true
+        default: 'any'
+
+concurrency:
+  group: manage-ufw-firewall
+  cancel-in-progress: false
+
+jobs:
+  manage_ufw:
+    name: Execute UFW Action
+    runs-on: [self-hosted, linux, x64, production]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run UFW Command
+        env:
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          INPUT_ACTION: ${{ github.event.inputs.action }}
+          INPUT_PORT: ${{ github.event.inputs.port }}
+          INPUT_PROTOCOL: ${{ github.event.inputs.protocol }}
+          INPUT_FROM_IP: ${{ github.event.inputs.from_ip }}
+        run: |
+          set -euo pipefail
+
+          # ── Sudo Helper (Consistent with Madeena swarm templates) ───────────
+          _sudo() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null
+              else
+                sudo "$@"
+              fi
+          }
+
+          # ── Verify UFW is Installed ──────────────────────────────────────────
+          if ! command -v ufw >/dev/null 2>&1; then
+            echo "❌ FATAL: 'ufw' utility is not installed on this server!"
+            exit 1
+          fi
+
+          # ── Strict Input Sanitization (Prevents shell injection) ─────────────
+          # Sanitizing Port: allow only numbers, colons, hyphens, and standard alphabetic words
+          if [ -n "$INPUT_PORT" ]; then
+            if [[ ! "$INPUT_PORT" =~ ^[a-zA-Z0-9:-]+$ ]]; then
+              echo "❌ FATAL: Invalid port format '$INPUT_PORT'. Only alphanumeric, '-' and ':' are allowed."
+              exit 1
+            fi
+          fi
+
+          # Sanitizing IP: allow only alphanumeric, dots, slashes, and 'any'
+          if [ -n "$INPUT_FROM_IP" ]; then
+            if [[ ! "$INPUT_FROM_IP" =~ ^[a-zA-Z0-9./]+$ ]]; then
+              echo "❌ FATAL: Invalid from_ip format '$INPUT_FROM_IP'. Only alphanumeric, '.' and '/' are allowed."
+              exit 1
+            fi
+          fi
+
+          echo "================================================================"
+          echo "         EXECUTING SECURE UFW FIREWALL MANAGEMENT               "
+          echo "================================================================"
+          echo "  Action:   $INPUT_ACTION"
+          echo "  Port:     ${INPUT_PORT:-N/A}"
+          echo "  Protocol: $INPUT_PROTOCOL"
+          echo "  From IP:  $INPUT_FROM_IP"
+          echo "================================================================"
+
+          CMD_OUTPUT=""
+          STATUS_BEFORE=$(_sudo ufw status | head -1 || echo "unknown")
+
+          case "$INPUT_ACTION" in
+            status)
+              echo "Checking current UFW status..."
+              CMD_OUTPUT=$(_sudo ufw status verbose 2>&1)
+              ;;
+
+            enable)
+              echo "Activating UFW firewall..."
+              # Using --force to bypass interactive confirmation prompts
+              CMD_OUTPUT=$(_sudo ufw --force enable 2>&1)
+              ;;
+
+            disable)
+              echo "Deactivating UFW firewall..."
+              CMD_OUTPUT=$(_sudo ufw disable 2>&1)
+              ;;
+
+            allow|deny)
+              if [ -z "$INPUT_PORT" ]; then
+                echo "❌ FATAL: Port number is required for '$INPUT_ACTION' action!"
+                exit 1
+              fi
+              
+              # Construct the rule arguments
+              RULE_ARGS=()
+              if [ "$INPUT_FROM_IP" != "any" ]; then
+                RULE_ARGS+=("from" "$INPUT_FROM_IP")
+              fi
+              
+              RULE_ARGS+=("to" "any" "port" "$INPUT_PORT")
+              
+              if [ "$INPUT_PROTOCOL" != "any" ]; then
+                RULE_ARGS+=("proto" "$INPUT_PROTOCOL")
+              fi
+
+              echo "Applying rule: ufw $INPUT_ACTION ${RULE_ARGS[*]}..."
+              CMD_OUTPUT=$(_sudo ufw $INPUT_ACTION "${RULE_ARGS[@]}" comment "Managed via GitHub Actions" 2>&1)
+              ;;
+
+            delete_rule)
+              if [ -z "$INPUT_PORT" ]; then
+                echo "❌ FATAL: Port number is required to delete a rule!"
+                exit 1
+              fi
+              
+              RULE_ARGS=()
+              if [ "$INPUT_FROM_IP" != "any" ]; then
+                RULE_ARGS+=("from" "$INPUT_FROM_IP")
+              fi
+              
+              RULE_ARGS+=("to" "any" "port" "$INPUT_PORT")
+              
+              if [ "$INPUT_PROTOCOL" != "any" ]; then
+                RULE_ARGS+=("proto" "$INPUT_PROTOCOL")
+              fi
+
+              echo "Deleting rule: ufw delete $INPUT_PROTOCOL/allow/deny rule..."
+              # Attempt to delete the rule using force to avoid prompt
+              CMD_OUTPUT=$(_sudo ufw --force delete allow "${RULE_ARGS[@]}" 2>&1 || _sudo ufw --force delete deny "${RULE_ARGS[@]}" 2>&1 || echo "Could not find matching rule to delete.")
+              ;;
+
+            *)
+              echo "❌ FATAL: Unsupported action '$INPUT_ACTION'!"
+              exit 1
+              ;;
+          esac
+
+          # Show Execution Output
+          echo ""
+          echo "▶ Output:"
+          echo "$CMD_OUTPUT" | sed 's/^/  /'
+          echo ""
+
+          # Fetch Final Status
+          echo "▶ Current Status & Rules List:"
+          FINAL_STATUS=$(_sudo ufw status verbose 2>&1)
+          echo "$FINAL_STATUS" | sed 's/^/  /'
+
+          # Write Markdown Summary Dashboard
+          {
+            echo "# UFW Firewall Administration Report"
+            echo ""
+            echo "### Operation Result: Success"
+            echo ""
+            echo "| Parameter | Value |"
+            echo "|---|---||"
+            echo "| **Requested Action** | \`$INPUT_ACTION\` |"
+            echo "| **Target Port** | \`$INPUT_PORT\` |"
+            echo "| **Protocol** | \`$INPUT_PROTOCOL\` |"
+            echo "| **Source IP Constraint** | \`$INPUT_FROM_IP\` |"
+            echo "| **UFW Status Before** | $STATUS_BEFORE |"
+            echo ""
+            echo "### Command Execution Log"
+            echo "\`\`\`text"
+            echo "$CMD_OUTPUT"
+            echo "\`\`\`"
+            echo ""
+            echo "### Current UFW Status & Active Rules"
+            echo "\`\`\`text"
+            echo "$FINAL_STATUS"
+            echo "\`\`\`"
+            echo "---"
+            echo "*Firewall rule managed securely by self-hosted runner on the production host.*"
+          } >> "$GITHUB_STEP_SUMMARY"

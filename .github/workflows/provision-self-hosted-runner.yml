@@ -1,0 +1,771 @@
+name: Provision Organization Self-Hosted Runner Pool
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: 'Skip provisioning and decommission, and only execute the three-job self-hosted verification and assertion'
+        required: false
+        default: false
+        type: boolean
+      decommission_excess:
+        description: 'Decommission and retire excess runner slots (Slots 4 and 5) from the production server'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  provision:
+    if: ${{ !inputs.verify_only || inputs.decommission_excess }}
+    name: Provision runner pool on production server
+    runs-on: [self-hosted, linux, x64, production]
+    timeout-minutes: 30
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SELF_HOSTED_CREDENTIAL: ${{ secrets.SELF_HOSTED_CREDENTIAL }}
+      SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+
+    steps:
+      - name: Provision, decommission, and verify runner pool slots
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Fail-safe check: refuse contradictory input combination
+          if [ "${{ inputs.verify_only }}" = "true" ] && [ "${{ inputs.decommission_excess }}" = "true" ]; then
+            echo "ERROR: Contradictory inputs received: verify_only=true and decommission_excess=true cannot be combined." >&2
+            echo "Please specify either verify_only or decommission_excess, not both." >&2
+            exit 1
+          fi
+
+          test -n "$SUDO_PASSWORD"
+
+          echo "Runner execution identity:"
+          whoami
+          id
+          groups
+
+          _sudo() {
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+          }
+
+          if ! printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' -v; then
+            echo "ERROR: sudo authentication failed for runner user: $(whoami)" >&2
+            echo "Verify that SUDO_PASSWORD belongs to this Linux user and that the user is permitted to sudo." >&2
+            exit 1
+          fi
+
+          for cmd in curl tar sha256sum; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+              echo "Prerequisite available: $cmd"
+            else
+              echo "ERROR: required command unavailable: $cmd" >&2
+              exit 1
+            fi
+          done
+
+          JSON_PARSER=""
+          if command -v python3 >/dev/null 2>&1; then
+            JSON_PARSER="python3"
+            echo "Prerequisite available: python3 (selected JSON parser)"
+          elif command -v jq >/dev/null 2>&1; then
+            JSON_PARSER="jq"
+            echo "Prerequisite available: jq (selected JSON parser)"
+          else
+            echo "ERROR: JSON parser unavailable; require python3 or jq" >&2
+            exit 1
+          fi
+
+          REGISTRATION_SCOPE=organization
+          RUNNER_GROUP=madeena-devops
+          RUNNER_TARGET_URL=https://github.com/Madeena-software
+
+          # Determine API authentication token: extract from SELF_HOSTED_CREDENTIAL if formatted as '--token <PAT>', otherwise use trimmed secret or fallback to GITHUB_TOKEN
+          API_AUTH_TOKEN=""
+          if [ -n "${SELF_HOSTED_CREDENTIAL:-}" ]; then
+            EXTRACTED_TOKEN="$(printf '%s\n' "$SELF_HOSTED_CREDENTIAL" \
+              | sed -nE 's/.*--token[[:space:]]+([^#[:space:]]+).*/\1/p' \
+              | head -n 1)"
+            if [ -n "$EXTRACTED_TOKEN" ]; then
+              API_AUTH_TOKEN="$EXTRACTED_TOKEN"
+            else
+              API_AUTH_TOKEN="$(printf '%s\n' "$SELF_HOSTED_CREDENTIAL" | xargs)"
+            fi
+          fi
+          if [ -z "$API_AUTH_TOKEN" ]; then
+            API_AUTH_TOKEN="${GH_TOKEN:-}"
+          fi
+
+          github_rest_api() {
+            local method="$1"
+            local path="$2"
+            local use_auth="${3:-false}"
+            local url="https://api.github.com/${path#/}"
+
+            case "$url" in
+              https://api.github.com/*) ;;
+              *)
+                echo "ERROR: Invalid GitHub API URL target: $url" >&2
+                return 1
+                ;;
+            esac
+
+            local curl_args=(
+              --silent
+              --show-error
+              --fail
+              --location
+              --retry 3
+              --retry-connrefused
+              -X "$method"
+              -H "Accept: application/vnd.github+json"
+              -H "X-GitHub-Api-Version: 2026-03-10"
+            )
+
+            if [ "$use_auth" = "true" ]; then
+              if [ -z "${API_AUTH_TOKEN:-}" ]; then
+                echo "ERROR: GitHub API authentication token is required but empty." >&2
+                return 1
+              fi
+              curl_args+=(-H "Authorization: Bearer $API_AUTH_TOKEN")
+            fi
+
+            curl "${curl_args[@]}" "$url"
+          }
+
+          get_registration_token() {
+            local raw_token=""
+            local api_err=0
+
+            if [ "$JSON_PARSER" = "python3" ]; then
+              raw_token="$(github_rest_api POST "orgs/Madeena-software/actions/runners/registration-token" true 2>/dev/null \
+                | python3 -c "import json, sys; d = json.load(sys.stdin); t = d.get('token'); print(t, end='') if (t and isinstance(t, str)) else sys.exit(1)" 2>/dev/null)" || api_err=1
+            elif [ "$JSON_PARSER" = "jq" ]; then
+              raw_token="$(github_rest_api POST "orgs/Madeena-software/actions/runners/registration-token" true 2>/dev/null \
+                | jq -er '.token // empty' 2>/dev/null)" || api_err=1
+            else
+              api_err=1
+            fi
+
+            if [ "$api_err" -ne 0 ] || [ -z "$raw_token" ] || [ "$raw_token" = "null" ]; then
+              echo "ERROR: Organization runner registration token unavailable. Organization-level registration in Madeena-software is required." >&2
+              return 1
+            fi
+
+            printf '%s' "$raw_token"
+          }
+
+          get_removal_token() {
+            local raw_token=""
+            local api_err=0
+
+            if [ "$JSON_PARSER" = "python3" ]; then
+              raw_token="$(github_rest_api POST "orgs/Madeena-software/actions/runners/remove-token" true 2>/dev/null \
+                | python3 -c "import json, sys; d = json.load(sys.stdin); t = d.get('token'); print(t, end='') if (t and isinstance(t, str)) else sys.exit(1)" 2>/dev/null)" || api_err=1
+            elif [ "$JSON_PARSER" = "jq" ]; then
+              raw_token="$(github_rest_api POST "orgs/Madeena-software/actions/runners/remove-token" true 2>/dev/null \
+                | jq -er '.token // empty' 2>/dev/null)" || api_err=1
+            else
+              api_err=1
+            fi
+
+            if [ "$api_err" -ne 0 ] || [ -z "$raw_token" ] || [ "$raw_token" = "null" ]; then
+              echo "ERROR: Organization runner removal token unavailable. Organization-level removal token from Madeena-software is required." >&2
+              return 1
+            fi
+
+            printf '%s' "$raw_token"
+          }
+
+          read_runner_metadata() {
+            local dir="$1"
+            local key="$2"
+            if [ ! -f "$dir/.runner" ]; then
+              return 1
+            fi
+            if [ "$JSON_PARSER" = "python3" ]; then
+              python3 -c "import json, sys; d = json.load(open('$dir/.runner')); print(str(next((v for k, v in d.items() if k.lower() == '$key'.lower()), '')))" 2>/dev/null || true
+            elif [ "$JSON_PARSER" = "jq" ]; then
+              jq -r --arg k "$key" 'to_entries[] | select(.key | ascii_downcase == ($k | ascii_downcase)) | .value // empty' "$dir/.runner" 2>/dev/null | head -n 1 || true
+            else
+              sed -nE "s/.*\"($key)\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\2/Ip" "$dir/.runner" 2>/dev/null | head -n 1
+            fi
+          }
+
+          validate_slot_identity() {
+            local dir="$1"
+            local expected_name="$2"
+            local expected_url="$3"
+            local expected_pool="${4:-}"
+
+            if [ ! -d "$dir" ] || [ ! -f "$dir/.runner" ] || [ ! -f "$dir/svc.sh" ] || [ ! -f "$dir/config.sh" ] || [ ! -f "$dir/run.sh" ]; then
+              echo "Directory $dir is missing one or more required runner installation files (.runner, svc.sh, config.sh, run.sh)." >&2
+              return 1
+            fi
+
+            local runner_meta_name
+            local runner_meta_url
+            local runner_meta_pool
+            runner_meta_name="$(read_runner_metadata "$dir" "agentName")"
+            runner_meta_url="$(read_runner_metadata "$dir" "gitHubUrl")"
+            runner_meta_pool="$(read_runner_metadata "$dir" "poolName")"
+
+            if [ -z "$runner_meta_name" ] || [ "$runner_meta_name" != "$expected_name" ]; then
+              echo "Slot metadata mismatch in $dir: agentName='$runner_meta_name' does not match expected '$expected_name'." >&2
+              return 1
+            fi
+
+            local norm_meta_url="${runner_meta_url%/}"
+            local norm_expected_url="${expected_url%/}"
+            if [ -z "$norm_meta_url" ] || [ "$norm_meta_url" != "$norm_expected_url" ]; then
+              echo "Slot metadata mismatch in $dir: gitHubUrl='$runner_meta_url' does not match expected '$expected_url'." >&2
+              return 1
+            fi
+
+            if [ -n "$expected_pool" ] && [ -n "$runner_meta_pool" ] && [ "$runner_meta_pool" != "$expected_pool" ]; then
+              echo "Slot metadata mismatch in $dir: poolName='$runner_meta_pool' does not match expected '$expected_pool'." >&2
+              return 1
+            fi
+
+            return 0
+          }
+
+          ARCHIVE_CACHE=""
+          ensure_archive() {
+            if [ -n "$ARCHIVE_CACHE" ] && [ -f "$ARCHIVE_CACHE" ]; then
+              return 0
+            fi
+
+            local release_tmp
+            release_tmp="$(mktemp /tmp/actions-runner-release.XXXXXX.json)"
+            trap 'rm -f "${release_tmp:-}"' RETURN
+
+            if ! github_rest_api GET "repos/actions/runner/releases/latest" false > "$release_tmp"; then
+              echo "ERROR: Failed to fetch latest actions/runner release metadata from GitHub API." >&2
+              rm -f "${release_tmp:-}"
+              return 1
+            fi
+
+            local runner_meta=""
+            local parse_err=0
+            if [ "$JSON_PARSER" = "python3" ]; then
+              runner_meta="$(python3 -c "import json, sys; d = json.load(open(sys.argv[1])); tag = d.get('tag_name', ''); ver = tag[1:] if tag.startswith('v') else tag; asset = f'actions-runner-linux-x64-{ver}.tar.gz'; matched = next((a for a in d.get('assets', []) if a.get('name') == asset), None); sys.exit(1) if not (tag and matched and matched.get('digest', '').startswith('sha256:')) else print('\n'.join([tag, asset, matched['digest'][7:], matched.get('browser_download_url', f'https://github.com/actions/runner/releases/download/{tag}/{asset}')]))" "$release_tmp")" || parse_err=1
+            elif [ "$JSON_PARSER" = "jq" ]; then
+              runner_meta="$(jq -er '
+                .tag_name as $tag |
+                if ($tag == null or $tag == "") then error("missing tag_name") else . end |
+                ($tag | if startswith("v") then .[1:] else . end) as $ver |
+                ("actions-runner-linux-x64-" + $ver + ".tar.gz") as $expected_name |
+                ([.assets[] | select(.name == $expected_name)][0]) as $asset |
+                if ($asset == null) then error("missing asset " + $expected_name) else . end |
+                $asset.digest as $digest |
+                if ($digest == null or ($digest | startswith("sha256:") | not)) then error("invalid digest") else . end |
+                ($digest | .[7:]) as $raw_sha |
+                ($asset.browser_download_url // ("https://github.com/actions/runner/releases/download/" + $tag + "/" + $expected_name)) as $url |
+                "\($tag)\n\($expected_name)\n\($raw_sha)\n\($url)"
+              ' "$release_tmp")" || parse_err=1
+            else
+              parse_err=1
+            fi
+
+            rm -f "${release_tmp:-}"
+
+            if [ "$parse_err" -ne 0 ] || [ -z "$runner_meta" ]; then
+              echo "ERROR: Failed to parse latest actions/runner release metadata or locate linux-x64 asset with sha256 digest." >&2
+              return 1
+            fi
+
+            local runner_version=""
+            local runner_asset=""
+            local runner_sha256=""
+            local runner_url=""
+
+            {
+              read -r runner_version
+              read -r runner_asset
+              read -r runner_sha256
+              read -r runner_url
+            } <<< "$runner_meta"
+
+            if [ -z "$runner_version" ] || [ -z "$runner_asset" ] || [ -z "$runner_sha256" ] || [ -z "$runner_url" ]; then
+              echo "ERROR: Extracted runner release metadata fields are incomplete." >&2
+              return 1
+            fi
+
+            ARCHIVE_CACHE="/tmp/${runner_asset}"
+
+            if [ -f "$ARCHIVE_CACHE" ] && ! (printf '%s  %s\n' "$runner_sha256" "$ARCHIVE_CACHE" | sha256sum --check --status >/dev/null 2>&1); then
+              rm -f "$ARCHIVE_CACHE"
+            fi
+            if [ ! -f "$ARCHIVE_CACHE" ]; then
+              curl --fail --location --retry 3 --output "$ARCHIVE_CACHE" "$runner_url"
+              printf '%s  %s\n' "$runner_sha256" "$ARCHIVE_CACHE" | sha256sum --check --status
+            fi
+          }
+
+          HOST_NAME="$(hostname -s)"
+          TOTAL_RUNNERS=3
+
+          # Explicit Stage B decommission path - disabled by default (executes ONLY when decommission_excess == true)
+          if [ "${{ inputs.decommission_excess }}" = "true" ]; then
+            echo "=== Executing explicit Stage B decommission for excess runner slots (Slots 4 and 5) ==="
+
+            # Self-destruction guard: ensure decommission control job is running on a retained runner
+            CURRENT_RUNNER="${RUNNER_NAME:-}"
+            if [ -z "$CURRENT_RUNNER" ]; then
+              echo "ERROR: RUNNER_NAME is empty; cannot verify if current runner is safe for decommission." >&2
+              exit 1
+            fi
+
+            if [ "$CURRENT_RUNNER" = "simama-production-server-4" ] || [ "$CURRENT_RUNNER" = "simama-production-server-5" ] || \
+               [ "$CURRENT_RUNNER" = "simama-production-${HOST_NAME}-4" ] || [ "$CURRENT_RUNNER" = "simama-production-${HOST_NAME}-5" ]; then
+              echo "ERROR: decommission control job was assigned to a retirement target ($CURRENT_RUNNER); refusing to uninstall the runner executing this job." >&2
+              exit 1
+            fi
+
+            case "$CURRENT_RUNNER" in
+              simama-production-server|simama-production-server-2|simama-production-server-3|\
+              simama-production-${HOST_NAME}|simama-production-${HOST_NAME}-2|simama-production-${HOST_NAME}-3)
+                echo "Decommission control job confirmed running on retained runner: $CURRENT_RUNNER"
+                ;;
+              *)
+                echo "ERROR: decommission control job is running on unrecognized runner '$CURRENT_RUNNER'; expecting one of retained Slots 1-3." >&2
+                exit 1
+                ;;
+            esac
+
+            for slot in 4 5; do
+              DECOM_DIR="$HOME/actions-runner-madeena-devops-${slot}"
+              DECOM_EXPECTED_NAME="simama-production-server-${slot}"
+              DECOM_ALT_NAME="simama-production-${HOST_NAME}-${slot}"
+
+              echo "--- Processing retirement target Slot $slot ($DECOM_DIR) ---"
+
+              if [ ! -e "$DECOM_DIR" ]; then
+                echo "Slot $slot directory ($DECOM_DIR) does not exist; already removed."
+                continue
+              fi
+
+              if [ -L "$DECOM_DIR" ]; then
+                echo "ERROR: Slot $slot target path ($DECOM_DIR) is a symbolic link. Aborting decommission." >&2
+                exit 1
+              fi
+
+              if [ ! -d "$DECOM_DIR" ]; then
+                echo "ERROR: Slot $slot target path ($DECOM_DIR) is not a regular directory. Aborting decommission." >&2
+                exit 1
+              fi
+
+              # Strict identity validation before any mutation
+              if [ ! -f "$DECOM_DIR/.runner" ] || [ ! -f "$DECOM_DIR/svc.sh" ] || [ ! -f "$DECOM_DIR/config.sh" ] || [ ! -f "$DECOM_DIR/run.sh" ]; then
+                echo "ERROR: Slot $slot target directory ($DECOM_DIR) is missing required runner installation files (.runner, svc.sh, config.sh, run.sh)." >&2
+                echo "State is ambiguous; stopping without modification." >&2
+                exit 1
+              fi
+
+              SLOT_META_NAME="$(read_runner_metadata "$DECOM_DIR" "agentName")"
+              if [ "$SLOT_META_NAME" != "$DECOM_EXPECTED_NAME" ] && [ "$SLOT_META_NAME" != "$DECOM_ALT_NAME" ]; then
+                echo "ERROR: Slot $slot metadata agentName '$SLOT_META_NAME' does not match expected '$DECOM_EXPECTED_NAME' or '$DECOM_ALT_NAME'." >&2
+                exit 1
+              fi
+
+              # Explicit assertion: target runner is NOT one of retained Slots 1-3
+              case "$SLOT_META_NAME" in
+                simama-production-server|simama-production-server-2|simama-production-server-3|\
+                simama-production-${HOST_NAME}|simama-production-${HOST_NAME}-2|simama-production-${HOST_NAME}-3)
+                  echo "CRITICAL ERROR: Slot $slot resolved to retained runner name '$SLOT_META_NAME'! Aborting immediately." >&2
+                  exit 1
+                  ;;
+              esac
+
+              SLOT_META_URL="$(read_runner_metadata "$DECOM_DIR" "gitHubUrl")"
+              SLOT_NORM_URL="${SLOT_META_URL%/}"
+              TARGET_NORM_URL="${RUNNER_TARGET_URL%/}"
+              if [ "$SLOT_NORM_URL" != "$TARGET_NORM_URL" ]; then
+                echo "ERROR: Slot $slot metadata gitHubUrl '$SLOT_META_URL' does not match expected '$RUNNER_TARGET_URL'." >&2
+                exit 1
+              fi
+
+              SLOT_META_POOL="$(read_runner_metadata "$DECOM_DIR" "poolName")"
+              if [ -n "$SLOT_META_POOL" ] && [ "$SLOT_META_POOL" != "$RUNNER_GROUP" ]; then
+                echo "ERROR: Slot $slot metadata poolName '$SLOT_META_POOL' does not match expected '$RUNNER_GROUP'." >&2
+                exit 1
+              fi
+
+              echo "Slot $slot identity verified: agentName='$SLOT_META_NAME', gitHubUrl='$SLOT_META_URL', poolName='$SLOT_META_POOL'."
+
+              # Safe service stop & uninstall
+              echo "Stopping systemd service for Slot $slot..."
+              (
+                cd "$DECOM_DIR"
+                _sudo ./svc.sh stop || true
+              )
+
+              echo "Uninstalling systemd service for Slot $slot..."
+              (
+                cd "$DECOM_DIR"
+                _sudo ./svc.sh uninstall
+              )
+
+              # Request fresh removal token
+              echo "Requesting fresh runner removal token for Slot $slot..."
+              REMOVE_TOKEN="$(get_removal_token)"
+              test -n "$REMOVE_TOKEN"
+              echo "::add-mask::$REMOVE_TOKEN"
+
+              echo "Unregistering runner for Slot $slot from GitHub Organization..."
+              (
+                cd "$DECOM_DIR"
+                ./config.sh remove --token "$REMOVE_TOKEN"
+              )
+              unset REMOVE_TOKEN
+
+              # Strict directory path assertion before deletion
+              case "$DECOM_DIR" in
+                "$HOME/actions-runner-madeena-devops-4"|"$HOME/actions-runner-madeena-devops-5")
+                  ;;
+                *)
+                  echo "ERROR: Decommission directory '$DECOM_DIR' does not match strict expected path allowlist." >&2
+                  exit 1
+                  ;;
+              esac
+
+              if [ -L "$DECOM_DIR" ]; then
+                echo "ERROR: Refusing to delete symlink '$DECOM_DIR'." >&2
+                exit 1
+              fi
+
+              echo "Removing runner directory for Slot $slot: $DECOM_DIR"
+              rm -rf "$DECOM_DIR"
+
+              if [ -e "$DECOM_DIR" ]; then
+                echo "ERROR: Failed to remove directory '$DECOM_DIR'." >&2
+                exit 1
+              fi
+
+              echo "Slot $slot decommissioned successfully."
+            done
+
+            echo "Excess runner decommission complete."
+          fi
+
+          # Slot 1: Validate active bootstrap runner prerequisites - MUST be preserved and not reconfigured
+          SLOT1_DIR="$HOME/actions-runner-madeena-devops"
+          SLOT1_EXPECTED_NAME="simama-production-server"
+          echo "=== Validating Bootstrap Slot 1 ($SLOT1_DIR) ==="
+          if [ ! -d "$SLOT1_DIR" ]; then
+            echo "ERROR: Bootstrap Slot 1 directory ($SLOT1_DIR) does not exist!" >&2
+            exit 1
+          fi
+          if [ ! -f "$SLOT1_DIR/.runner" ]; then
+            echo "ERROR: Bootstrap Slot 1 configuration ($SLOT1_DIR/.runner) not found!" >&2
+            exit 1
+          fi
+          if [ ! -f "$SLOT1_DIR/svc.sh" ] || [ ! -f "$SLOT1_DIR/config.sh" ] || [ ! -f "$SLOT1_DIR/run.sh" ]; then
+            echo "ERROR: Bootstrap Slot 1 ($SLOT1_DIR) is missing required service or runner scripts (svc.sh, config.sh, run.sh)!" >&2
+            exit 1
+          fi
+
+          SLOT1_META_NAME="$(read_runner_metadata "$SLOT1_DIR" "agentName")"
+          if [ -n "$SLOT1_META_NAME" ] && [ "$SLOT1_META_NAME" != "$SLOT1_EXPECTED_NAME" ]; then
+            echo "ERROR: Bootstrap Slot 1 ($SLOT1_DIR) agentName '$SLOT1_META_NAME' does not match expected '$SLOT1_EXPECTED_NAME'!" >&2
+            exit 1
+          fi
+
+          SLOT1_URL="$(read_runner_metadata "$SLOT1_DIR" "gitHubUrl")"
+          SLOT1_NORM_URL="${SLOT1_URL%/}"
+          TARGET_NORM_URL="${RUNNER_TARGET_URL%/}"
+          if [ -n "$SLOT1_NORM_URL" ] && [ "$SLOT1_NORM_URL" != "$TARGET_NORM_URL" ]; then
+            echo "ERROR: Bootstrap Slot 1 ($SLOT1_DIR) URL '$SLOT1_URL' does not match expected '$RUNNER_TARGET_URL'!" >&2
+            exit 1
+          fi
+
+          SLOT1_POOL="$(read_runner_metadata "$SLOT1_DIR" "poolName")"
+          if [ -n "$SLOT1_POOL" ] && [ "$SLOT1_POOL" != "$RUNNER_GROUP" ]; then
+            echo "ERROR: Bootstrap Slot 1 ($SLOT1_DIR) poolName '$SLOT1_POOL' does not match expected '$RUNNER_GROUP'!" >&2
+            exit 1
+          fi
+
+          if ! (
+            cd "$SLOT1_DIR"
+            _sudo ./svc.sh status >/dev/null 2>&1
+          ); then
+            echo "ERROR: Bootstrap Slot 1 ($SLOT1_DIR) systemd service status check failed. Service is not in active/running state!" >&2
+            exit 1
+          fi
+          echo "Slot 1 bootstrap runner verified (valid configuration and active service). Preserving Slot 1."
+
+          # Slots 2 through 3: Inspect and idempotently configure/start (Slots 4 and 5 are strictly excluded)
+          for i in $(seq 2 "$TOTAL_RUNNERS"); do
+            RUNNER_DIR="$HOME/actions-runner-madeena-devops-${i}"
+            RUNNER_NAME="simama-production-${HOST_NAME}-${i}"
+
+            echo "=== Checking Slot $i/$TOTAL_RUNNERS ($RUNNER_NAME in $RUNNER_DIR) ==="
+
+            if [ ! -d "$RUNNER_DIR" ] || [ -z "$(ls -A "$RUNNER_DIR" 2>/dev/null)" ]; then
+              echo "Slot $i ($RUNNER_NAME) is missing; configuring new runner instance..."
+              mkdir -p "$RUNNER_DIR"
+              ensure_archive
+              tar -xzf "$ARCHIVE_CACHE" -C "$RUNNER_DIR"
+
+              SLOT_TOKEN="$(get_registration_token)"
+              test -n "$SLOT_TOKEN"
+              echo "::add-mask::$SLOT_TOKEN"
+
+              (
+                cd "$RUNNER_DIR"
+                ./config.sh --unattended \
+                  --url "$RUNNER_TARGET_URL" \
+                  --token "$SLOT_TOKEN" \
+                  --name "$RUNNER_NAME" \
+                  --runnergroup "$RUNNER_GROUP" \
+                  --labels self-hosted,linux,x64,production \
+                  --work _work
+              )
+
+              echo "Installing systemd service for runner $i..."
+              (
+                cd "$RUNNER_DIR"
+                _sudo ./svc.sh install
+                _sudo ./svc.sh start
+                _sudo ./svc.sh status
+              )
+              echo "Runner $i service is active."
+
+            elif validate_slot_identity "$RUNNER_DIR" "$RUNNER_NAME" "$RUNNER_TARGET_URL" "$RUNNER_GROUP"; then
+              echo "Slot $i ($RUNNER_NAME) metadata and identity verified; preserving registration."
+              if [ ! -f "$RUNNER_DIR/.service" ]; then
+                echo "Runner $i service is not installed; installing and starting service..."
+                (
+                  cd "$RUNNER_DIR"
+                  _sudo ./svc.sh install
+                  _sudo ./svc.sh start
+                  _sudo ./svc.sh status
+                )
+                echo "Runner $i service is now active."
+              elif (
+                cd "$RUNNER_DIR"
+                _sudo ./svc.sh status >/dev/null 2>&1
+              ); then
+                echo "Runner $i service is already active."
+              else
+                echo "Runner $i service is installed but stopped; starting service..."
+                (
+                  cd "$RUNNER_DIR"
+                  _sudo ./svc.sh start
+                  _sudo ./svc.sh status
+                )
+                echo "Runner $i service is now active."
+              fi
+
+            else
+              echo "ERROR: Slot $i ($RUNNER_DIR) exists but failed identity/metadata validation." >&2
+              echo "Existing directory state is ambiguous or inconsistent. Stopping to avoid destructive recreation without authority." >&2
+              exit 1
+            fi
+          done
+
+          echo "All $TOTAL_RUNNERS runner slots verified/active in group: $RUNNER_GROUP"
+
+  verify-self-hosted:
+    name: Verify runner pool concurrency (job ${{ matrix.job_index }}/3)
+    needs: provision
+    if: ${{ !cancelled() && (inputs.verify_only || needs.provision.result == 'success') }}
+    runs-on: [self-hosted, linux, x64, production]
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        job_index: [1, 2, 3]
+
+    steps:
+      - name: Synchronize and record runner execution proof
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${RUNNER_NAME:-}"
+
+          JOB_INDEX="${{ matrix.job_index }}"
+          BARRIER_DIR="/tmp/madeena-runner-concurrency-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          echo "Job index: $JOB_INDEX"
+          echo "GitHub assigned this job to runner: $RUNNER_NAME"
+          echo "Runner host: $(hostname)"
+          echo "Run-scoped barrier directory: $BARRIER_DIR"
+
+          # Create run-scoped barrier directory safely
+          mkdir -p "$BARRIER_DIR"
+          if [ -L "$BARRIER_DIR" ] || [ ! -d "$BARRIER_DIR" ]; then
+            echo "ERROR: Invalid barrier directory state: $BARRIER_DIR" >&2
+            exit 1
+          fi
+
+          START_TS=$(date +%s)
+
+          # Atomically write arrival record
+          ARRIVAL_TMP="$BARRIER_DIR/arrival-${JOB_INDEX}.json.tmp"
+          ARRIVAL_FILE="$BARRIER_DIR/arrival-${JOB_INDEX}.json"
+
+          cat <<EOF > "$ARRIVAL_TMP"
+          {
+            "job_index": $JOB_INDEX,
+            "runner_name": "$RUNNER_NAME",
+            "hostname": "$(hostname)",
+            "start_time": $START_TS
+          }
+          EOF
+          mv "$ARRIVAL_TMP" "$ARRIVAL_FILE"
+
+          echo "Job $JOB_INDEX arrived at barrier at timestamp $START_TS. Waiting for all 3 matrix jobs..."
+
+          # Bounded barrier synchronization loop (up to 180 seconds)
+          MAX_WAIT=180
+          INTERVAL=2
+          ELAPSED=0
+          BARRIER_REACHED=false
+
+          while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+            if [ -f "$BARRIER_DIR/arrival-1.json" ] && \
+               [ -f "$BARRIER_DIR/arrival-2.json" ] && \
+               [ -f "$BARRIER_DIR/arrival-3.json" ]; then
+              BARRIER_REACHED=true
+              break
+            fi
+            sleep "$INTERVAL"
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          if [ "$BARRIER_REACHED" != "true" ]; then
+            echo "ERROR: Barrier wait timed out after ${MAX_WAIT}s waiting for all 3 matrix arrivals." >&2
+            echo "Present barrier arrivals:" >&2
+            ls -la "$BARRIER_DIR" >&2 || true
+            exit 1
+          fi
+
+          echo "All 3 matrix jobs arrived at barrier (elapsed: ${ELAPSED}s). Holding concurrent execution window..."
+
+          # Hold execution concurrently for 25 seconds to guarantee strong positive temporal overlap
+          sleep 25
+          END_TS=$(date +%s)
+
+          # Atomically write completed proof record
+          PROOF_TMP="$BARRIER_DIR/runner-job-${JOB_INDEX}.json.tmp"
+          PROOF_FILE="$BARRIER_DIR/runner-job-${JOB_INDEX}.json"
+
+          cat <<EOF > "$PROOF_TMP"
+          {
+            "job_index": $JOB_INDEX,
+            "runner_name": "$RUNNER_NAME",
+            "hostname": "$(hostname)",
+            "start_time": $START_TS,
+            "end_time": $END_TS
+          }
+          EOF
+          mv "$PROOF_TMP" "$PROOF_FILE"
+
+          echo "Job $JOB_INDEX proof recorded: Start=$START_TS End=$END_TS Duration=$((END_TS - START_TS))s"
+
+  assert-runner-pool:
+    name: Assert 3 distinct concurrent runners
+    needs: verify-self-hosted
+    if: ${{ !cancelled() && needs.verify-self-hosted.result == 'success' }}
+    runs-on: [self-hosted, linux, x64, production]
+    timeout-minutes: 5
+
+    steps:
+      - name: Assert distinct runners and positive temporal concurrency overlap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          BARRIER_DIR="/tmp/madeena-runner-concurrency-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          # Strict path validation for barrier directory
+          case "$BARRIER_DIR" in
+            /tmp/madeena-runner-concurrency-[0-9]*-[0-9]*)
+              ;;
+            *)
+              echo "ERROR: Barrier directory '$BARRIER_DIR' does not match expected run-scoped naming format." >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -L "$BARRIER_DIR" ] || [ ! -d "$BARRIER_DIR" ]; then
+            echo "ERROR: Barrier directory '$BARRIER_DIR' is missing, invalid, or a symlink." >&2
+            exit 1
+          fi
+
+          python3 - "$BARRIER_DIR" <<'EOF'
+          import glob, json, os, sys
+
+          barrier_dir = sys.argv[1]
+          proof_files = glob.glob(os.path.join(barrier_dir, "runner-job-*.json"))
+          print(f"Found {len(proof_files)} runner proof file(s) in {barrier_dir}.")
+
+          if len(proof_files) != 3:
+              print(f"ERROR: Expected exactly 3 proof files, but found {len(proof_files)}", file=sys.stderr)
+              sys.exit(1)
+
+          records = []
+          for f in sorted(proof_files):
+              with open(f, "r", encoding="utf-8") as fp:
+                  data = json.load(fp)
+                  records.append(data)
+                  print(f"Job {data.get('job_index')}: Runner='{data.get('runner_name')}' Host='{data.get('hostname')}' Start={data.get('start_time')} End={data.get('end_time')}")
+
+          # Validate job indexes
+          job_indexes = [r.get("job_index") for r in records]
+          if sorted(job_indexes) != [1, 2, 3]:
+              print(f"ERROR: Expected job indexes [1, 2, 3], but got {sorted(job_indexes)}", file=sys.stderr)
+              sys.exit(1)
+
+          # Validate runner names
+          runners = [r.get("runner_name", "") for r in records]
+          for r in runners:
+              if not r:
+                  print("ERROR: Encountered empty runner name in proof records.", file=sys.stderr)
+                  sys.exit(1)
+
+          unique_runners = set(runners)
+
+          print("\n=== Runner Pool Verification Summary ===")
+          print(f"Total jobs executed: {len(records)}")
+          print(f"Unique runner names: {len(unique_runners)}")
+          for r in sorted(unique_runners):
+              print(f"  - {r}")
+
+          if len(unique_runners) != 3:
+              print(f"\nFAILED: Expected exactly 3 distinct runners, but got {len(unique_runners)}: {unique_runners}", file=sys.stderr)
+              sys.exit(1)
+
+          # Concurrency overlap calculation
+          start_times = [r["start_time"] for r in records]
+          end_times = [r["end_time"] for r in records]
+          max_start = max(start_times)
+          min_end = min(end_times)
+          overlap = min_end - max_start
+
+          print(f"\nConcurrency overlap: {overlap}s (max_start={max_start}, min_end={min_end})")
+          if overlap <= 0:
+              print(f"FAILED: Jobs did not execute concurrently (overlap window is {overlap}s <= 0).", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"SUCCESS: Verified concurrent execution overlap across the 3 runner pool processes ({overlap}s overlap).")
+          print("\nVERIFICATION PASSED: Exactly 3 distinct runner processes executed in parallel.")
+          EOF
+
+          # Clean up run-scoped barrier directory on assertion SUCCESS only
+          echo "Cleaning up run-scoped barrier directory: $BARRIER_DIR"
+          rm -rf "$BARRIER_DIR"
+
+          if [ -e "$BARRIER_DIR" ]; then
+            echo "ERROR: Failed to clean up barrier directory '$BARRIER_DIR'." >&2
+            exit 1
+          fi
+
+          echo "Barrier directory cleaned up successfully."

@@ -1,0 +1,174 @@
+name: "Server — Configure Domain Nginx & SSL"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Madeena Standard CI/CD — Dynamic Nginx Reverse Proxy & SSL Setup
+#
+# Configures a domain reverse proxy to a local port with Let's Encrypt SSL.
+# RUNNER: Must run on 'self-hosted' (targets the production server directly).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (e.g. fams.mhcsgo.cloud)'
+        type: string
+        required: true
+      port:
+        description: 'Upstream localhost port (e.g. 8013)'
+        type: string
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  configure-nginx-ssl:
+    name: Configure Nginx & SSL
+    runs-on: [self-hosted, linux, production]
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate Inputs and Create Nginx Site Configuration
+        env:
+          INPUT_DOMAIN: ${{ github.event.inputs.domain }}
+          INPUT_PORT: ${{ github.event.inputs.port }}
+        run: |
+          set -euo pipefail
+          set -x
+
+          DOMAIN="$(echo "${INPUT_DOMAIN:-}" | xargs)"
+          PORT="$(echo "${INPUT_PORT:-}" | xargs)"
+
+          # ── Input Sanitization ──────────────────────────────────────────────
+          if [ -z "$DOMAIN" ] || [ -z "$PORT" ]; then
+            echo "❌ FATAL: Both 'domain' and 'port' inputs are required."
+            exit 1
+          fi
+
+          if [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            echo "❌ FATAL: Invalid domain format '$DOMAIN'."
+            exit 1
+          fi
+
+          if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+            echo "❌ FATAL: Invalid port '$PORT'. Must be a number between 1 and 65535."
+            exit 1
+          fi
+
+          NGINX_CONF="/etc/nginx/sites-available/${DOMAIN}.conf"
+          NGINX_LINK="/etc/nginx/sites-enabled/${DOMAIN}.conf"
+
+          echo "===> Generating HTTP server block for ${DOMAIN} -> port ${PORT}..."
+          TMP_CONF=$(mktemp)
+          cat << EOF > "$TMP_CONF"
+          server {
+              listen 80;
+              server_name ${DOMAIN};
+
+              client_max_body_size 100M;
+
+              location / {
+                  proxy_pass http://127.0.0.1:${PORT};
+                  proxy_set_header Host \$host;
+                  proxy_set_header X-Real-IP \$remote_addr;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+
+                  # WebSocket support
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade \$http_upgrade;
+                  proxy_set_header Connection "upgrade";
+              }
+          }
+          EOF
+
+          echo "===> Copying configuration to sites-available..."
+          sudo cp "$TMP_CONF" "$NGINX_CONF"
+          sudo chmod 644 "$NGINX_CONF"
+          rm -f "$TMP_CONF"
+
+          echo "===> Creating symlink to sites-enabled..."
+          sudo ln -sf "$NGINX_CONF" "$NGINX_LINK"
+
+          echo "===> Testing Nginx configuration..."
+          sudo nginx -t
+
+          echo "===> Reloading Nginx..."
+          sudo systemctl reload nginx
+          echo "✅ HTTP site block for ${DOMAIN} is active."
+
+      - name: Obtain and Configure Let's Encrypt SSL Certificate
+        env:
+          INPUT_DOMAIN: ${{ github.event.inputs.domain }}
+        run: |
+          set -euo pipefail
+          set -x
+
+          DOMAIN="$(echo "${INPUT_DOMAIN:-}" | xargs)"
+
+          echo "===> Running Certbot for ${DOMAIN}..."
+          if command -v certbot >/dev/null 2>&1; then
+            if sudo certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos --redirect --register-unsafely-without-email; then
+              echo "✅ SSL successfully configured by Certbot for ${DOMAIN}."
+            else
+              echo "⚠️ Warning: Certbot was unable to obtain SSL certificate for ${DOMAIN} at this time."
+              echo "ℹ️ This typically happens if DNS has not propagated yet. The HTTP reverse proxy on port 80 is fully active and working."
+              echo "ℹ️ Once DNS is pointed to this server, re-run this workflow to enable HTTPS/SSL."
+            fi
+          else
+            echo "❌ Certbot is not installed on the server!"
+            exit 1
+          fi
+
+      - name: Verify Nginx Reload and Service Health
+        env:
+          INPUT_DOMAIN: ${{ github.event.inputs.domain }}
+          INPUT_PORT: ${{ github.event.inputs.port }}
+        run: |
+          set -euo pipefail
+          set -x
+
+          DOMAIN="$(echo "${INPUT_DOMAIN:-}" | xargs)"
+          PORT="$(echo "${INPUT_PORT:-}" | xargs)"
+
+          echo "===> Final Nginx configuration test..."
+          sudo nginx -t
+
+          echo "===> Reloading Nginx to apply SSL certificates..."
+          sudo systemctl reload nginx
+
+          echo "===> Verifying local upstream port ${PORT} connectivity..."
+          if curl -I -s -f "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
+            echo "✅ Upstream service on port ${PORT} responded successfully."
+          else
+            echo "⚠️ Notice: Upstream service on port ${PORT} is not yet responding locally. This is normal if the target container/application has not been started yet."
+          fi
+
+      - name: Publish summary
+        if: always()
+        env:
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF_NAME: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          JOB_STATUS: ${{ job.status }}
+          INPUT_DOMAIN: ${{ github.event.inputs.domain }}
+          INPUT_PORT: ${{ github.event.inputs.port }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "# ${WORKFLOW_NAME} Summary"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Status | ${JOB_STATUS} |"
+            echo "| Domain | ${INPUT_DOMAIN} |"
+            echo "| Upstream Port | ${INPUT_PORT} |"
+            echo "| Run Number | ${RUN_NUMBER} |"
+            echo "| Run ID | ${RUN_ID} |"
+            echo "| Ref | ${REF_NAME} |"
+            echo "| Triggered by | ${ACTOR} |"
+          } >> "$GITHUB_STEP_SUMMARY"

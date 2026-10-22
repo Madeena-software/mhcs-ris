@@ -1,0 +1,101 @@
+name: Deploy OpenDICOM Sirius RIS (Docker Compose)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Docker Compose action to execute'
+        required: true
+        default: 'up -d --build'
+        type: choice
+        options:
+          - 'up -d --build'
+          - 'up -d'
+          - 'down'
+          - 'restart'
+          - 'ps'
+          - 'pull'
+      target_service:
+        description: 'Specific service (optional: empty for all services)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy / Operate Docker Compose on Target Server
+    runs-on: [self-hosted, linux, production]
+    timeout-minutes: 20
+
+    env:
+      SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Setup environment file
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ -n "${{ secrets.DOCKER_COMPOSE_ENV }}" ]; then
+            echo "Injecting secrets into docker-compose.env"
+            echo "${{ secrets.DOCKER_COMPOSE_ENV }}" > docker-compose.env
+          elif [ ! -f docker-compose.env ]; then
+            echo "docker-compose.env missing, copying default if available"
+            touch docker-compose.env
+          fi
+
+      - name: Pre-flight Port Conflict Check
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Checking for port conflicts before startup..."
+          source docker-compose.env 2>/dev/null || true
+          
+          CHECK_PORTS=("${SIRIUS_FRONTEND_PORT:-4000}" "${SIRIUS_BACKEND_PORT:-2000}" "${SIRIUS_DB_PORT:-27017}")
+          for p in "${CHECK_PORTS[@]}"; do
+            # Check if port listening by a process other than docker-proxy for our containers
+            if ss -tuln | grep -q ":$p "; then
+              echo "WARNING: Port $p is currently in use on host."
+              echo "If this is not opendicom containers, change SIRIUS_*_PORT in docker-compose.env or GitHub Secrets."
+            else
+              echo "Port $p is available."
+            fi
+          done
+
+      - name: Run Docker Compose command
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          _docker_compose() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' docker compose "$@"
+            else
+              docker compose "$@"
+            fi
+          }
+
+          ACTION="${{ inputs.action }}"
+          TARGET_SERVICE="${{ inputs.target_service }}"
+
+          echo "Executing: docker compose $ACTION $TARGET_SERVICE"
+          if [ -n "$TARGET_SERVICE" ]; then
+            _docker_compose $ACTION $TARGET_SERVICE
+          else
+            _docker_compose $ACTION
+          fi
+
+      - name: Verify Running Containers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ -n "${SUDO_PASSWORD:-}" ]; then
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' docker compose ps
+          else
+            docker compose ps
+          fi

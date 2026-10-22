@@ -9,7 +9,7 @@ services:
       - ./database/cron/crontab_file:/etc/crontab
       - ./database/backups/:/backups
     ports:
-      - 27017:27017
+      - "${SIRIUS_DB_PORT:-27017}:27017"
     restart: unless-stopped
     networks:
       - opendicom_net
@@ -19,7 +19,7 @@ services:
     image: opendicom/sirius-backend:1.8.1
     env_file: ./docker-compose.env
     ports:
-      - 2000:2000
+      - "${SIRIUS_BACKEND_PORT:-2000}:2000"
     depends_on:
       - opendicom_sirius_database
     restart: unless-stopped
@@ -31,7 +31,7 @@ services:
     image: opendicom/sirius-frontend:1.8.1
     env_file: ./docker-compose.env
     ports:
-      - 4000:80
+      - "${SIRIUS_FRONTEND_PORT:-4000}:80"
     depends_on:
       - opendicom_sirius_backend
     restart: unless-stopped
