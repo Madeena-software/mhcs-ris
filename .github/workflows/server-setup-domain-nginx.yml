@@ -28,6 +28,8 @@ jobs:
     runs-on: [self-hosted, linux, production]
     timeout-minutes: 10
 
+    env:
+      SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
     steps:
       - name: Validate Inputs and Create Nginx Site Configuration
         env:
@@ -83,19 +85,27 @@ jobs:
           }
           EOF
 
+          _sudo() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+            else
+              sudo "$@"
+            fi
+          }
+
           echo "===> Copying configuration to sites-available..."
-          sudo cp "$TMP_CONF" "$NGINX_CONF"
-          sudo chmod 644 "$NGINX_CONF"
+          _sudo cp "$TMP_CONF" "$NGINX_CONF"
+          _sudo chmod 644 "$NGINX_CONF"
           rm -f "$TMP_CONF"
 
           echo "===> Creating symlink to sites-enabled..."
-          sudo ln -sf "$NGINX_CONF" "$NGINX_LINK"
+          _sudo ln -sf "$NGINX_CONF" "$NGINX_LINK"
 
           echo "===> Testing Nginx configuration..."
-          sudo nginx -t
+          _sudo nginx -t
 
           echo "===> Reloading Nginx..."
-          sudo systemctl reload nginx
+          _sudo systemctl reload nginx
           echo "✅ HTTP site block for ${DOMAIN} is active."
 
       - name: Obtain and Configure Let's Encrypt SSL Certificate
@@ -107,9 +117,17 @@ jobs:
 
           DOMAIN="$(echo "${INPUT_DOMAIN:-}" | xargs)"
 
+          _sudo() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+            else
+              sudo "$@"
+            fi
+          }
+
           echo "===> Running Certbot for ${DOMAIN}..."
           if command -v certbot >/dev/null 2>&1; then
-            if sudo certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos --redirect --register-unsafely-without-email; then
+            if _sudo certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos --redirect --register-unsafely-without-email; then
               echo "✅ SSL successfully configured by Certbot for ${DOMAIN}."
             else
               echo "⚠️ Warning: Certbot was unable to obtain SSL certificate for ${DOMAIN} at this time."
@@ -132,11 +150,19 @@ jobs:
           DOMAIN="$(echo "${INPUT_DOMAIN:-}" | xargs)"
           PORT="$(echo "${INPUT_PORT:-}" | xargs)"
 
+          _sudo() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+            else
+              sudo "$@"
+            fi
+          }
+
           echo "===> Final Nginx configuration test..."
-          sudo nginx -t
+          _sudo nginx -t
 
           echo "===> Reloading Nginx to apply SSL certificates..."
-          sudo systemctl reload nginx
+          _sudo systemctl reload nginx
 
           echo "===> Verifying local upstream port ${PORT} connectivity..."
           if curl -I -s -f "http://127.0.0.1:${PORT}" >/dev/null 2>&1; then
