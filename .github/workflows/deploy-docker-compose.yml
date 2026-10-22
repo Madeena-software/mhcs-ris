@@ -67,6 +67,72 @@ jobs:
             fi
           done
 
+      - name: Optimize Docker daemon network
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Configuring Docker daemon concurrent download limits to prevent timeouts..."
+          DAEMON_JSON="/etc/docker/daemon.json"
+          _sudo() {
+            if [ -n "${SUDO_PASSWORD:-}" ]; then
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+            else
+              sudo "$@"
+            fi
+          }
+
+          if [ ! -f "$DAEMON_JSON" ] || ! grep -q "max-concurrent-downloads" "$DAEMON_JSON" 2>/dev/null; then
+            echo "Applying max-concurrent-downloads: 2 to /etc/docker/daemon.json"
+            TMP_D=$(mktemp)
+            if [ -f "$DAEMON_JSON" ]; then
+              # Merge existing json or overwrite safely
+              _sudo cp "$DAEMON_JSON" "$TMP_D"
+              python3 -c "import json; d=json.load(open('$TMP_D')); d['max-concurrent-downloads']=2; json.dump(d,open('$TMP_D','w'),indent=2)" 2>/dev/null || echo '{"max-concurrent-downloads": 2}' > "$TMP_D"
+            else
+              echo '{"max-concurrent-downloads": 2}' > "$TMP_D"
+            fi
+            _sudo mkdir -p /etc/docker
+            _sudo cp "$TMP_D" "$DAEMON_JSON"
+            _sudo chmod 644 "$DAEMON_JSON"
+            rm -f "$TMP_D"
+            _sudo systemctl reload docker || true
+          fi
+
+      - name: Pull Docker images with retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Pulling images with retry logic..."
+
+          pull_with_retry() {
+            local img="$1"
+            local max_attempts=5
+            local count=1
+            echo "Pulling $img..."
+            until docker pull "$img" || [ $count -ge $max_attempts ]; do
+              echo "Pull failed for $img (attempt $count/$max_attempts). Retrying in 10s..."
+              count=$((count + 1))
+              sleep 10
+            done
+            if [ $count -ge $max_attempts ]; then
+              docker pull "$img"
+            fi
+          }
+
+          # Only pull pre-built images if action is not down/ps
+          ACTION="${{ inputs.action }}"
+          if [[ "$ACTION" != "down" && "$ACTION" != "ps" ]]; then
+            IMAGES=(
+              "opendicom/sirius-database:8.2.6"
+              "opendicom/sirius-backend:1.8.1"
+              "opendicom/sirius-frontend:1.8.1"
+            )
+
+            for img in "${IMAGES[@]}"; do
+              pull_with_retry "$img"
+            done
+          fi
+
       - name: Run Docker Compose command
         shell: bash
         run: |
