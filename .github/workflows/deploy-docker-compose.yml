@@ -6,13 +6,13 @@ on:
       action:
         description: 'Docker Compose action to execute'
         required: true
-        default: 'up -d --build'
+        default: 'up -d'
         type: choice
         options:
-          - 'up -d --build'
           - 'up -d'
-          - 'down'
+          - 'up -d --build'
           - 'restart'
+          - 'down'
           - 'ps'
           - 'pull'
       target_service:
@@ -28,7 +28,7 @@ jobs:
   deploy:
     name: Deploy / Operate Docker Compose on Target Server
     runs-on: [self-hosted, linux, production]
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     env:
       SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
@@ -102,7 +102,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Pulling images with retry logic..."
+          echo "Pulling pre-built official images..."
 
           pull_with_retry() {
             local img="$1"
@@ -119,18 +119,14 @@ jobs:
             fi
           }
 
-          # Only pull pre-built images if action is not down/ps
           ACTION="${{ inputs.action }}"
           if [[ "$ACTION" != "down" && "$ACTION" != "ps" ]]; then
-            IMAGES=(
-              "opendicom/sirius-database:8.2.6"
-              "opendicom/sirius-backend:1.8.1"
-              "opendicom/sirius-frontend:1.8.1"
-            )
-
-            for img in "${IMAGES[@]}"; do
-              pull_with_retry "$img"
-            done
+            # Database
+            pull_with_retry "opendicom/sirius-database:8.2.6"
+            # Backend
+            pull_with_retry "opendicom/sirius-backend:1.8.1"
+            # Frontend
+            pull_with_retry "opendicom/sirius-frontend:1.8.1"
           fi
 
       - name: Run Docker Compose command
