@@ -841,14 +841,14 @@
   },
   "DIALOGS": {
     "DELETE_ITEMS": {
-      "TITLE": "Delete Items / Hapus Item Terpilih",
-      "CONFIRM_DELETE": "Are you sure you want to delete the selected items? / Apakah Anda yakin ingin menghapus item yang dipilih?",
-      "WARNING": "Notice: if confirmed, deletion is permanent on the database and cannot be recovered / Perhatian: jika dikonfirmasi, data dihapus permanen dari basis data dan tidak dapat dipulihkan.",
-      "ENTER_DELETE_CODE": "Enter delete code / Masukkan kode penghapusan:",
-      "DELETE_CODE": "Delete Code / Kode Penghapusan",
-      "ENTER_CODE": "Enter code / Masukkan kode penghapusan",
-      "CANCEL": "Cancel / Batal",
-      "YES_DELETE": "Yes, Delete / Ya, Hapus"
+      "TITLE": "Hapus item yang dipilih",
+      "CONFIRM_DELETE": "Apakah Anda yakin ingin menghapus item yang dipilih?",
+      "WARNING": "Perhatian: jika dikonfirmasi, data akan dihapus secara permanen dari basis data dan tidak dapat dipulihkan.",
+      "ENTER_DELETE_CODE": "Masukkan kode penghapusan:",
+      "DELETE_CODE": "Kode penghapusan",
+      "ENTER_CODE": "Masukkan kode penghapusan",
+      "CANCEL": "Batal",
+      "YES_DELETE": "Ya, Hapus"
     },
     "APPOINTMENT_REQUEST_DETAILS": {
       "TITLE": "Permintaan pemeriksaan",
@@ -940,9 +940,9 @@
       "CLOSE": "TUTUP"
     },
     "DELETE_APPOINTMENT_DRAFT": {
-      "TITLE": "Discard Appointment / Buang Janji Temu",
-      "CONFIRM_DISCARD": "Do you want to discard the current appointment? / Apakah Anda ingin membuang janji temu saat ini?",
-      "WARNING": "Notice: if confirmed, the current appointment cannot be recovered / Perhatian: jika dikonfirmasi, janji temu saat ini tidak dapat dipulihkan.",
+      "TITLE": "Buang janji temu saat ini",
+      "CONFIRM_DISCARD": "Apakah Anda ingin membuang janji temu saat ini?",
+      "WARNING": "Perhatian: jika dikonfirmasi, janji temu saat ini tidak dapat dipulihkan.",
       "APPOINTMENT_DETAILS": "Data janji temu untuk dijadwalkan:",
       "APPOINTMENT_DATE": "Tanggal janji temu:",
       "START_TIME": "Waktu mulai:",
@@ -964,10 +964,10 @@
       "PROCEDURE_TO_PERFORM": "Prosedur yang akan dilakukan:",
       "MODALITY": "Modalitas:",
       "REQUIRES_CONSENT": "Memerlukan persetujuan tindakan medis:",
-      "YES": "Yes / Ya",
-      "NO": "No / Tidak",
-      "CANCEL": "Cancel / Batal",
-      "YES_DISCARD": "Yes, Discard / Ya, Buang"
+      "YES": "Ya",
+      "NO": "Tidak",
+      "CANCEL": "Batal",
+      "YES_DISCARD": "Ya, Buang"
     },
     "FOUND_PERSON": {
       "TITLE": "Alamat email sudah terdaftar",
@@ -975,17 +975,17 @@
       "DOCUMENTS": "DOKUMEN IDENTITAS:",
       "NAMES": "NAMA DEPAN:",
       "SURNAMES": "NAMA BELAKANG:",
-      "CONFIRM_LOAD": "Do you want to load the registered user data into the form? / Apakah Anda ingin memuat data pengguna terdaftar ke formulir?",
-      "NO_USE_ANOTHER_EMAIL": "No, Use Another Email / Tidak, Gunakan Email Lain",
-      "YES_EDIT_FOUND_USER": "Yes, Edit Found User / Ya, Edit Pengguna Ditemukan"
+      "CONFIRM_LOAD": "Apakah Anda ingin memuat data pengguna yang sudah terdaftar ke dalam formulir?",
+      "NO_USE_ANOTHER_EMAIL": "Tidak, Gunakan Email Lain",
+      "YES_EDIT_FOUND_USER": "Ya, Edit Pengguna yang Ditemukan"
     },
     "PASSWORD_REQUEST": {
       "TITLE": "Permintaan kata sandi",
       "ENTER_USER_PASSWORD": "Masukkan kata sandi pengguna:",
       "PASSWORD": "Kata sandi",
       "ENTER_PASSWORD": "Masukkan kata sandi",
-      "CANCEL": "Cancel / Batal",
-      "ACCEPT": "Accept / Terima"
+      "CANCEL": "Batal",
+      "ACCEPT": "Terima"
     },
     "SEARCH_INFO": {
       "TITLE": "Bantuan pencarian",
@@ -1052,8 +1052,8 @@
       "ROOM_PLACE_PLACEHOLDER": "Contoh: Ruang A",
       "NO_BOARDS": "Tidak ada layar panggilan pasien yang tersedia untuk akun Anda.",
       "SUCCESS": "Pasien berhasil dipanggil.",
-      "CANCEL": "Cancel / Batal",
-      "CALL": "Call Patient / Panggil Pasien"
+      "CANCEL": "Batal",
+      "CALL": "Panggil Pasien"
     },
     "CALL_PATIENT_EXISTS": {
       "TITLE": "Pasien sudah dipanggil",
@@ -1061,17 +1061,17 @@
       "CURRENT_CALL": "Panggilan saat ini:",
       "NEW_CALL": "Panggilan baru:",
       "NO_ROOM_PLACE": "(tanpa ruangan / tempat)",
-      "CONFIRM_UPDATE": "Do you want to update the room/place and call time? / Apakah Anda ingin memperbarui ruangan/tempat dan waktu panggilan?",
-      "NO": "No / Tidak",
-      "YES_UPDATE": "Yes, Update / Ya, Perbarui"
+      "CONFIRM_UPDATE": "Apakah Anda ingin memperbarui ruangan / tempat dan waktu panggilan?",
+      "NO": "Tidak",
+      "YES_UPDATE": "Ya, Perbarui"
     },
     "MWL_RESEND": {
       "TITLE": "Kirim ulang pasien ke MWL",
       "PATIENT_ALREADY_SENT": "Pasien yang dipilih sudah dikirim ke daftar kerja PACS.",
       "SEND_DATE_TIME": "Tanggal dan waktu pengiriman:",
-      "CONFIRM_RESEND": "Do you want to resend this patient to PACS MWL? / Apakah Anda ingin mengirim ulang pasien ini ke MWL PACS?",
-      "NO": "No / Tidak",
-      "YES_RESEND": "Yes, Resend / Ya, Kirim Ulang"
+      "CONFIRM_RESEND": "Apakah Anda ingin mengirim ulang pasien ini ke MWL PACS?",
+      "NO": "Tidak",
+      "YES_RESEND": "Ya, Kirim Ulang"
     },
     "PERFORMING_DOWNLOADS": {
       "TITLE": "Berkas terkait",
