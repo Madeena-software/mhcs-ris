@@ -1,7 +1,7 @@
 ---
 title: Update the existing RIS deployment with rollback
 document_id: AGENT-TASK-RIS-002
-version: 1.0
+version: 1.1
 status: validated-published
 language: en-US
 last_updated: 2026-10-31
@@ -22,7 +22,7 @@ The user confirmed the target is the other server operated by the existing
 
 ## Baseline and task revision
 
-Implementation baseline: `24ff711b145228492bffddaab37ca1081640978b`.
+Implementation baseline: `23714867be92eb96cb4d2df555cba2f05150f837`.
 Task revision: resolve from the local publication commit containing this content
 before starting execution; supplied explicitly in the execution handoff.
 No accepted baseline for this new objective has been established by this planning
@@ -155,3 +155,31 @@ After publication, the Executor returns **Review Required** with observed local
 evidence, or **Planning Required** with the exact blocking condition. Reviewer
 evaluates the immutable governing task and implementation independently of release
 authorization. Implementation acceptance does not authorize a live rollout.
+
+## Bounded remediation — empty upload placeholders
+
+Review basis: implementation `23714867be92eb96cb4d2df555cba2f05150f837`
+under governing task `27132c55822842c71da9da304d4a5353403c709a`.
+Verdict: **REMEDIATION REQUIRED**. Failed workflow run
+`41194024495`, job `124516449382`, passed all 20 helper tests, then stopped at
+the unmounted-upload guard before any deployment mutation. The guard reports
+the repository's zero-byte `backend/src/uploads/.gitkeep` as an upload; this
+false positive is reproducible with the original Node probe locally. The run
+does not establish whether the host also has real uploaded files.
+
+The human's “Workflow failed. Fix it” authorizes bounded correction under the same
+objective; earlier local-commit and GitHub-push authorization remains applicable.
+Publication of this revised task must precede implementation. No new production
+dispatch, data migration, volume operation, or weakened upload protection is
+authorized.
+
+Required corrections: exclude only empty regular `.gitkeep` placeholder files
+from the upload probe. Continue to detect real files (including nested/hidden
+files), nonempty `.gitkeep` files, and symlinks so that unsafe recreation remains
+blocked. Improve the guard message to distinguish real uploads from placeholders.
+
+Additional verification: execute the actual Node probe against disposable
+filesystem fixtures and the tracked placeholder directory; prove empty
+placeholders allow an update and real uploads still stop before pull/recreation.
+Run all existing helper tests and syntax/diff checks. Report live rerun status
+truthfully; pushing a fix does not mean the production deployment passed.
