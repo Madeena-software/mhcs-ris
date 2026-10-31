@@ -12,8 +12,10 @@ runtime language settings/dictionaries, and preserve the existing project,
 storage and exact-image rollback. All 32 isolated/local parser tests, Actions
 syntax and both Indonesian dictionary validators pass. Implementation `0dfdf9faa57f78204504f7a329c87a05222fcd93` is accepted after
 source review and those checks. It was pushed to `origin/main`; production run
-`41220372005` was dispatched and is in progress. Live source-build/recovery
-success is not yet established.
+`41220372005` failed during frontend build after backend build succeeded. No
+running-container mutation occurred. Build-only diagnostics now retain the last
+60 lines; Compose/runtime diagnostics remain private. Remediation task revision:
+`cf03dbbe7802e27746320e50f48b6b152c9c39ab`. All 33 local tests pass; retry pending.
 See [Runner operations](10_runner_updates_and_rollback.md).
 
 Current task: Indonesian language support on `feature/indonesian-language`, based on `origin/develop`.

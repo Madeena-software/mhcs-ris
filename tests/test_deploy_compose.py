@@ -16,6 +16,17 @@ deploy = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(deploy)
 
 
+class DockerDiagnosticsTests(unittest.TestCase):
+    def test_build_failure_shows_diagnostics_but_other_commands_stay_private(self):
+        for command, visible in [("build", True), ("compose", False), ("inspect", False)]:
+            with self.subTest(command=command), patch.object(deploy.subprocess, "run", return_value=
+                    subprocess.CompletedProcess([], 1, stdout="", stderr="diagnostic detail")), \
+                    patch("sys.stderr", new=io.StringIO()) as output:
+                with self.assertRaises(deploy.DeployError):
+                    deploy.docker(command, "test")
+                self.assertEqual("diagnostic detail" in output.getvalue(), visible)
+
+
 class FakeDocker:
     def __init__(self, directory):
         self.directory = directory

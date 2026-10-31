@@ -46,6 +46,9 @@ def docker(*args, timeout=600):
     except (OSError, subprocess.TimeoutExpired) as error:
         raise DeployError("Docker command unavailable or timed out") from error
     if result.returncode:
+        if args[0] == "build":
+            # Source builds receive no runtime secrets; keep other Docker errors private.
+            print("\n".join((result.stdout + "\n" + result.stderr).splitlines()[-60:]), file=sys.stderr)
         raise DeployError("Docker command failed: " + " ".join(args[:2]))
     return result.stdout
 

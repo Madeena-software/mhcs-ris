@@ -1,3 +1,17 @@
+## 2026-10-31 UTC — Source build diagnostic remediation
+
+- Model: Not available.
+- Review: run `41220372005` built backend but failed building frontend, before
+  any running-container mutation. CI helper tests passed with five host-Node
+  fixtures skipped. The build cause was hidden by generic Docker errors.
+- Governing task: `.agents/tasks/deploy-indonesian-source.md` at
+  `cf03dbbe7802e27746320e50f48b6b152c9c39ab`; remediation baseline `60dffec1`.
+- Change: show only the last 60 lines of failed source-build diagnostics. Builds
+  receive no runtime env files or credential build arguments. Other Docker
+  diagnostics remain suppressed, covered by a dedicated separation test.
+- Verification: all 33 local tests and diff checks pass. The live cause remains
+  unknown until the authorized retry; running application remains unchanged.
+
 # Worklog
 
 ## 2026-10-31 UTC — Indonesian source deployment workflow
