@@ -50,6 +50,8 @@ jobs:
         env:
           DEPLOY_ACTION: ${{ inputs.action }}
           TARGET_SERVICE: ${{ inputs.target_service }}
+          RIS_BUILD_SOURCE: 'true'
+          SIRIUS_LANGUAJE: 'id'
           SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
           DOCKER_COMPOSE_ENV: ${{ secrets.DOCKER_COMPOSE_ENV }}
           RIS_DEPLOY_STATE_DIR: ${{ vars.RIS_DEPLOY_STATE_DIR }}

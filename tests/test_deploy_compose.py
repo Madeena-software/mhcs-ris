@@ -34,6 +34,8 @@ class FakeDocker:
         self.calls = []
         self.up_failures = []
         self.pull_failure = False
+        self.build_failure = False
+        self.language_mismatch = False
         self.status = "running"
 
     def items(self):
@@ -54,6 +56,18 @@ class FakeDocker:
         if args[0] == "ps":
             return " ".join(deploy.SERVICES)
         if args[0] == "exec":
+            if args[-1] == "http://127.0.0.1/assets/main-settings.json":
+                language = "en" if self.language_mismatch else self.config["services"][deploy.SERVICES[2]]["environment"]["SIRIUS_LANGUAJE"]
+                return json.dumps({"appSettings": {"language": language}, "FullCalendarOptions": {"locale": language},
+                                   "CKEditorConfig": {"language": {"ui": language, "content": language}}})
+            if args[-1] == "http://127.0.0.1/assets/i18n/id.json":
+                return '{"label":"Indonesian fixture"}'
+            return ""
+        if args[0] == "build":
+            if self.build_failure:
+                raise deploy.DeployError("Build failed")
+            image = args[args.index("--tag") + 1]
+            self.images[image] = "sha256:source-" + Path(args[-1]).name
             return ""
         if args[:2] == ("image", "tag"):
             self.images[args[3]] = args[2]
@@ -108,7 +122,7 @@ class DeploymentTests(unittest.TestCase):
         self.patcher = patch.object(deploy, "docker", side_effect=self.engine)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
-        self.environment = patch.dict(os.environ, {"DOCKER_COMPOSE_ENV": ""})
+        self.environment = patch.dict(os.environ, {"DOCKER_COMPOSE_ENV": "", "RIS_BUILD_SOURCE": "", "SIRIUS_LANGUAJE": ""})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.deployment = deploy.Deployment(self.state_root)
@@ -130,6 +144,66 @@ class DeploymentTests(unittest.TestCase):
             self.assertTrue(settings["image"].startswith("mhcs-ris-recovery:"))
         self.assertIn("old$$literal", Path(previous["file"]).read_text())
         self.assertFalse(self.deployment.state["pending"])
+
+    def test_source_update_builds_apps_and_overrides_language_then_rollback_restores_it(self):
+        for settings in self.engine.config["services"].values():
+            settings["environment"]["SIRIUS_LANGUAJE"] = "es"
+        for settings in self.engine.candidate["services"].values():
+            settings["environment"]["SIRIUS_LANGUAJE"] = "en"
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            self.run_action()
+            self.assertEqual(self.images(), ["sha256:new0", "sha256:source-backend", "sha256:source-frontend"])
+            for service in deploy.SERVICES[1:]:
+                self.assertEqual(self.engine.config["services"][service]["environment"]["SIRIUS_LANGUAJE"], "id")
+            pulls = [call for call in self.engine.calls if "pull" in call and "up" not in call]
+            self.assertEqual(len(pulls), 1)
+            self.assertEqual(pulls[0][-1], deploy.SERVICES[0])
+            self.run_action("rollback")
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:old2"])
+        for settings in self.engine.config["services"].values():
+            self.assertEqual(settings["environment"]["SIRIUS_LANGUAJE"], "es")
+
+    def test_source_build_failure_leaves_containers_unchanged(self):
+        self.engine.build_failure = True
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            with self.assertRaisesRegex(deploy.DeployError, "Build failed"):
+                self.run_action()
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:old2"])
+        self.assertFalse(any("up" in call for call in self.engine.calls))
+
+    def test_source_partial_update_builds_only_selected_app(self):
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            self.run_action(target=deploy.SERVICES[2])
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:source-frontend"])
+        self.assertEqual(sum(call[0] == "build" for call in self.engine.calls), 1)
+        self.assertFalse(any("pull" in call and "up" not in call for call in self.engine.calls))
+
+    def test_source_apply_failure_restores_old_images(self):
+        self.engine.up_failures = [True, False]
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            with self.assertRaisesRegex(deploy.DeployError, "rollback succeeded"):
+                self.run_action()
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:old2"])
+
+    def test_source_mount_guard_runs_before_build(self):
+        self.engine.candidate["services"][deploy.SERVICES[0]]["volumes"][0]["source"] = "/wrong"
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true"}):
+            with self.assertRaisesRegex(deploy.DeployError, "Mount configuration differs"):
+                self.run_action()
+        self.assertFalse(any(call[0] == "build" for call in self.engine.calls))
+
+    def test_source_language_mismatch_rolls_back(self):
+        self.engine.language_mismatch = True
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            with self.assertRaisesRegex(deploy.DeployError, "rollback succeeded"):
+                self.run_action()
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:old2"])
+
+    def test_pull_does_not_build_even_with_source_mode(self):
+        with patch.dict(os.environ, {"RIS_BUILD_SOURCE": "true", "SIRIUS_LANGUAJE": "id"}):
+            self.run_action("pull")
+        self.assertFalse(any(call[0] == "build" for call in self.engine.calls))
+        self.assertEqual(self.images(), ["sha256:old0", "sha256:old1", "sha256:old2"])
 
     def test_manual_rollback_restores_exact_old_images_and_environment(self):
         self.run_action()

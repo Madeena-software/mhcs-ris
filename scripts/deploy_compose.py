@@ -313,10 +313,29 @@ class Deployment:
             candidate["volumes"] = {**record["config"].get("volumes", {}), **candidate.get("volumes", {})}
         if candidate.get("networks", {}) != config.get("networks", {}):
             raise DeployError("Candidate changes the existing network configuration")
+        selected = [target] if target else list(SERVICES)
+        built = []
+        if action.startswith("up ") and os.environ.get("RIS_BUILD_SOURCE") == "true":
+            for service in selected:
+                if service == SERVICES[0]:
+                    continue
+                component = service.removeprefix("opendicom_sirius_")
+                context = source / component
+                image = "mhcs-ris-source:" + component + "-" + uuid.uuid4().hex
+                print("Building repository " + component + "; running containers remain untouched.", flush=True)
+                docker("build", "--tag", image, "--file", str(context / "docker/Dockerfile"),
+                       str(context), timeout=2400)
+                candidate["services"][service]["image"] = image
+                language = os.environ.get("SIRIUS_LANGUAJE")
+                if language:
+                    candidate["services"][service].setdefault("environment", {})["SIRIUS_LANGUAJE"] = language
+                built.append(service)
         meta["env_text"] = env_text
         _, requested = self.store(meta, candidate)
-        print("Pulling candidate images; running containers remain untouched.")
-        compose(requested, "pull", *([target] if target else []))
+        to_pull = [service for service in selected if service not in built]
+        if to_pull:
+            print("Pulling candidate images; running containers remain untouched.", flush=True)
+            compose(requested, "pull", *to_pull)
         if action == "pull":
             self.save({**self.state, "current": previous})
             print("Images pulled; running deployment unchanged.")
@@ -328,6 +347,24 @@ class Deployment:
         self.save({**old_state, "current": previous, "pending": previous})
         try:
             self.apply(requested, target)
+            language = os.environ.get("SIRIUS_LANGUAJE")
+            if language and built:
+                if SERVICES[1] in built:
+                    docker("exec", SERVICES[1], "node", "-e",
+                           "const fs=require('fs'),y=require('js-yaml'),a=require('assert');"
+                           "a.equal(y.load(fs.readFileSync('main.settings.yaml','utf8')).language,process.argv[1]);"
+                           "a.ok(Object.keys(JSON.parse(fs.readFileSync('i18n/'+process.argv[1]+'.json'))).length)", language)
+                if SERVICES[2] in built:
+                    settings = json.loads(docker("exec", SERVICES[2], "wget", "-qO-",
+                                                 "http://127.0.0.1/assets/main-settings.json"))
+                    if (settings["appSettings"]["language"] != language or
+                            settings["FullCalendarOptions"]["locale"] != language or
+                            settings["CKEditorConfig"]["language"] != {"ui": language, "content": language}):
+                        raise DeployError("Frontend language settings do not match the requested language")
+                    if not json.loads(docker("exec", SERVICES[2], "wget", "-qO-",
+                                              "http://127.0.0.1/assets/i18n/" + language + ".json")):
+                        raise DeployError("Frontend language dictionary is empty")
+                print("Runtime language settings and dictionaries verified: " + language, flush=True)
             current, _ = self.snapshot(meta, candidate, containers(meta["project"]))
             self.save({"current": current, "previous": previous, "pending": None})
         except (DeployError, OSError, ValueError, KeyError) as error:

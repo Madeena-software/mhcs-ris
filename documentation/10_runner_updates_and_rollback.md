@@ -32,18 +32,27 @@ state and retained images are local to that host/account.
    directory. `DOCKER_COMPOSE_ENV`, when supplied, overrides the existing env-file
    values; without it, the last successful environment source is retained. The
    original `docker-compose.env` remains required for Compose file resolution.
-5. Pulls candidate images before changing running services, pins the selected
+5. Builds frontend/backend from the checked-out source and pulls the database
+   image before changing running services, pins the selected
    image IDs, and reconciles with `up -d --no-build --pull never`. A service-specific
    update uses `--no-deps`; the other services retain their current configuration.
-6. Checks readiness for up to 180 seconds. If the update or readiness check fails,
+6. Checks readiness for up to 180 seconds, then verifies configured language and
+   dictionary assets for rebuilt apps. If the update or verification fails,
    restores the recorded working stack and checks readiness again. The job stays
    failed even if recovery succeeds, so the failed release remains visible.
 
-The existing Compose file uses published upstream images. `up -d --build` is
-retained as a compatibility choice and performs the same image update as `up -d`;
-this workflow does not build repository source. Change the image versions in
-`docker-compose.yml` when releasing a different published image version. Reusing
-an unchanged upstream image will not deploy source-only changes from this repo.
+The workflow sets `RIS_BUILD_SOURCE=true` and `SIRIUS_LANGUAJE=id`. Both
+`up -d` choices build selected app services using the existing repository
+Dockerfiles under the deployment lock. Builds use unique local image tags and
+finish before container mutation; build failures leave the running stack intact.
+The selected apps receive an explicit language override, taking precedence over
+`DOCKER_COMPOSE_ENV`. Database configuration and persistent mounts are preserved.
+Runtime checks verify backend language/dictionary and frontend app, calendar,
+editor language and dictionary availability. A mismatch triggers rollback.
+Recovery restores the previous images and environment, including language.
+
+`pull` remains a prebuilt-image download operation; it does not build or deploy
+source. With source mode disabled, updates retain the upstream-image behavior.
 
 Docker may recreate a changed service container. Project identity and mounted
 data remain the same; brief service interruption is possible. New or changed
@@ -94,9 +103,9 @@ database bind mounts remain there.
 
 Rollback changes application images/configuration; it does not reverse database
 writes, schema migrations, or lost files. Take database backups separately and
-confirm schema compatibility before changing database/application versions. These
-changes have local test evidence; no production dispatch or live recovery drill
-has been performed for this workflow update.
+confirm schema compatibility before changing database/application versions. The prior upload-guard correction passed production run `41205935652`. Source
+build rollout evidence is recorded in STATE/WORKLOG; no live recovery drill has
+been performed.
 
 Local verification:
 

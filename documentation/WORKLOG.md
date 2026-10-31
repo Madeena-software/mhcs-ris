@@ -1,5 +1,30 @@
 # Worklog
 
+## 2026-10-31 UTC — Indonesian source deployment workflow
+
+- Model: Not available.
+- Authority: User requested language configuration in the workflow and another
+  production run after the source-image requirement was explained. Necessary
+  task/implementation commits, push and dispatch are authorized for this outcome.
+- Prior review: accepted upload guard correction `44dfaf2b` under task revision
+  `4adcbe6a25e1abbe3362dc68c8b6b8808fda1371`; all 25 local tests pass, source
+  review preserves real uploads, and run `41205935652` succeeded at that revision.
+- Governing successor: `.agents/tasks/deploy-indonesian-source.md` at
+  `dd26a76cd97e110ad256c10c1307be260ebcd139`, baseline `44dfaf2b`.
+- Change: workflow enables source builds and `SIRIUS_LANGUAJE=id`. Helper builds
+  selected app images under the existing lock after mount/network/upload guards,
+  before container recreation; pins image IDs, skips registry pulls for local
+  apps, and retains database pulls. Runtime language/dictionary checks participate
+  in automatic rollback. Partial updates and other operations remain bounded.
+- Verification: all 32 tests pass, including source build failure, language override,
+  language mismatch recovery, selected-service builds, mount refusal before build,
+  pull compatibility, existing recovery and real Compose parsing. actionlint
+  passes with the existing production runner label configured. Both dictionary
+  validators, Python syntax and diff checks pass.
+- Review: source diff and observed checks satisfy the local implementation
+  criteria; immutable implementation acceptance is resolved after its commit.
+  Live source builds, deployment and rollback drill remain unverified here.
+
 ## 2026-10-31 UTC — Empty upload placeholder guard correction
 
 - Model: Not available.

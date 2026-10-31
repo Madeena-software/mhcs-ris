@@ -44,8 +44,11 @@ authority_note: This context is supporting repository knowledge. Approved reposi
 - `.agents/tasks/deploy-sirius-ris-via-runner.md` — historical WP-01 runner
   automation contract; live acceptance was not re-established during this change.
 
-The deployment workflow uses published upstream images from `docker-compose.yml`
-and preserves the existing project's host mounts. Its recovery files live outside
+The deployment workflow builds repository frontend/backend images with Indonesian
+settings and preserves the existing project's host mounts. Governing successor:
+`.agents/tasks/deploy-indonesian-source.md` at
+`dd26a76cd97e110ad256c10c1307be260ebcd139`. The database keeps its configured image.
+Its recovery files live outside
 the Actions checkout. See `documentation/10_runner_updates_and_rollback.md`.
 The separately documented Coolify application is outside this workflow's scope.
 

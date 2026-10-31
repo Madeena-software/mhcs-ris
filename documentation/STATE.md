@@ -1,23 +1,18 @@
 # Project state
 
 Updated: 2026-10-31 UTC
-Latest workflow remediation: run `41194024495` passed helper tests but stopped
-before deployment at the unmounted-upload guard. The guard counted the tracked
-zero-byte `.gitkeep` placeholder as uploaded data. The helper now ignores only
-empty regular `.gitkeep` files; real files and symlinks remain protected.
-All 25 local tests pass, including actual Node probe fixtures. No production
-rerun of this correction has been dispatched; start a new run from `main` after
-the fix is pushed rather than retrying the old commit.
+Production runner: the upload guard remediation at `44dfaf2b` passed production
+run `41205935652`. All 25 baseline local tests also pass; that bounded correction
+is accepted. The successor task is `.agents/tasks/deploy-indonesian-source.md`
+at `dd26a76cd97e110ad256c10c1307be260ebcd139`.
 
-Current maintenance: production-runner deployment updates and rollback are
-implemented locally in `.github/workflows/deploy-docker-compose.yml` and
-`scripts/deploy_compose.py`. The workflow reuses the existing Compose project and
-mounts, records exact recovery images/configuration, checks readiness, and supports
-automatic/manual recovery. It uses a separate checkout and private recovery state.
-See [Runner operations](10_runner_updates_and_rollback.md). Isolated transaction
-tests and real Compose configuration parsing pass; actionlint passes with the
-existing custom `production` runner label configured. No production workflow
-dispatch or live rollback drill has been performed. Changes are not pushed.
+The updated workflow sets `RIS_BUILD_SOURCE=true` and `SIRIUS_LANGUAJE=id`.
+Updates build the repository frontend/backend before changing containers, verify
+runtime language settings/dictionaries, and preserve the existing project,
+storage and exact-image rollback. All 32 isolated/local parser tests, Actions
+syntax and both Indonesian dictionary validators pass. The source rollout is
+pending push/dispatch; no live source-build or recovery success is claimed yet.
+See [Runner operations](10_runner_updates_and_rollback.md).
 
 Current task: Indonesian language support on `feature/indonesian-language`, based on `origin/develop`.
 
