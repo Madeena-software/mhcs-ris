@@ -32,3 +32,11 @@
 - Deployment status: No Coolify changes made. A saved token exists, but the dashboard URL is not configured; requested it from the user to identify the Madeena project and preserve its existing resources.
 - Final local verification: The production build passed outside the sandbox using `NG_BUILD_MAX_WORKERS=2 timeout 240 npm run build -- --progress=false` (exit 0, build hash `c75a252ed5dbb4f7`, about 170 seconds). Existing report form CSS produced a 413-byte warning-budget overrun; no build errors occurred.
 - Git delivery: Source commit `4f709855` authored by Ariftia was pushed to `origin/feature/indonesian-language`. Coolify rollout remains pending the dashboard URL; no deployment success is claimed.
+
+## 2026-10-31 UTC — Local Coolify rollout
+
+- Model: Not available.
+- Target: Discovered local Coolify 4.5.3 on port 8000. The token exposes only Root Team, with no Madeena project. Created Madeena and selected its production environment on the existing localhost ARM64 server. Other applications remain untouched.
+- Configuration: Added `docker-compose.coolify.yml` to build the branch's frontend, backend, and database with persistent volumes, health checks, internal-only database/backend ports, and a loopback-only frontend on port 4000. Required secrets are supplied through Coolify. Added Docker context exclusions, included the seed archive in the database image, and made the static-only OHIF copy stage explicitly amd64 for ARM64 builds.
+- Checks: Compose configuration validation passes with placeholder secrets; `git diff --check` passes. Existing production frontend build passed earlier. Full container build and live verification remain pending.
+- Operations and rollback: See `09_coolify_deployment.md`. Retain data volumes for rollback/redeploy. PACS/Wezen are external integrations and are not created by this deployment.

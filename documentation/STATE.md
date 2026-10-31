@@ -30,10 +30,11 @@ passed outside the sandbox (exit 0, about 170 seconds). The existing report form
 exceeds its warning budget by 413 bytes; the build completed successfully.
 
 Delivery: source commit `4f709855` is pushed to `origin/feature/indonesian-language`.
-Git author identity is configured as Ariftia. Coolify deployment preparation is in
-progress; the dashboard origin is needed to locate the Madeena project. A saved
-deployment token is available through the local credential file; its value is not
-recorded here. No Coolify resources have been changed.
+Git author identity is configured as Ariftia. Local Coolify was found on port 8000
+(version 4.5.3). Created the previously absent `Madeena` project and selected its
+`production` environment on the local ARM64 server. Source-build configuration is
+in [Local Coolify deployment](09_coolify_deployment.md). Application creation and
+deployment are in progress. Other projects have not been modified.
 
-Remaining: Coolify target identification/deployment, browser verification, and
+Remaining: Coolify application deployment/health verification, browser verification, and
 native clinical terminology review.
