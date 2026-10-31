@@ -1,0 +1,6 @@
+src/node_modules
+src/uploads/*
+!src/uploads/.gitkeep
+src/tmp/*
+!src/tmp/.gitkeep
+*.log

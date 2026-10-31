@@ -280,7 +280,7 @@
               <mat-chip-list>
                 <mat-chip class="mat-pathology" *ngFor="let currentPathology of sharedProp.advanced_search.pathologies; let i = index">
                   <small>{{ currentPathology.name }}</small> 
-                  <mat-icon matTooltip="Quitar patología" (click)="removePathology(currentPathology)">close</mat-icon>
+                  <mat-icon matTooltip="{{ 'REPORTS.FORM.REMOVE_PATHOLOGY' | i18n }}" (click)="removePathology(currentPathology)">close</mat-icon>
                 </mat-chip>
               </mat-chip-list>
             </small>

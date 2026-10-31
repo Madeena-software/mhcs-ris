@@ -1,0 +1,73 @@
+services:
+  opendicom_sirius_database:
+    build:
+      context: ./database
+      dockerfile: docker/Dockerfile
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-sirius_user}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set a database password in Coolify}
+      MONGO_INITDB_DATABASE: sirius_db
+    volumes:
+      - sirius_database:/data/db
+      - sirius_backups:/backups
+    healthcheck:
+      test: ["CMD", "mongosh", "--host", "opendicom_sirius_database", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  opendicom_sirius_backend:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile
+    environment:
+      SIRIUS_LANGUAJE: id
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-sirius_user}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set a database password in Coolify}
+      MONGO_INITDB_DATABASE: sirius_db
+      SIRIUS_BACKEND_DB_HOST: opendicom_sirius_database
+      SIRIUS_BACKEND_DB_PORT: "27017"
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Set a JWT secret in Coolify}
+      SIRIUS_BACKEND_DELETE_CODE: ${SIRIUS_BACKEND_DELETE_CODE:?Set a deletion code in Coolify}
+      SIRIUS_BACKEND_RABC_EXCLUDE_CODE: ${SIRIUS_BACKEND_RABC_EXCLUDE_CODE:?Set an access exclusion code in Coolify}
+      IP_SERVER: localhost
+      SIRIUS_FRONTEND_HTTP_PORT: "4000"
+    volumes:
+      - sirius_uploads:/app/uploads
+    depends_on:
+      opendicom_sirius_database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:2000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  opendicom_sirius_frontend:
+    build:
+      context: ./frontend
+      dockerfile: docker/Dockerfile
+    environment:
+      SIRIUS_LANGUAJE: id
+      SIRIUS_BACKEND_RABC_EXCLUDE_CODE: ${SIRIUS_BACKEND_RABC_EXCLUDE_CODE:?Set an access exclusion code in Coolify}
+    ports:
+      - "127.0.0.1:4000:80"
+    depends_on:
+      opendicom_sirius_backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/assets/i18n/id.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  sirius_database:
+  sirius_backups:
+  sirius_uploads:

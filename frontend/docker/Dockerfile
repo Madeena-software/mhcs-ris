@@ -11,7 +11,8 @@
 # OHIF STAGE (Extract bundles):
 # ------------------------------------------------------------------------------------- #
 # Set ohif-bundles image:
-FROM opendicom/ohif-viewer:3.9 AS ohif-bundles
+# This stage only copies static files from the upstream amd64-only image.
+FROM --platform=linux/amd64 opendicom/ohif-viewer:3.9 AS ohif-bundles
 # ------------------------------------------------------------------------------------- #
 
 
@@ -30,6 +31,9 @@ RUN npm install -g @angular-devkit/build-angular@13.1.2
 
 # Set workdir:
 WORKDIR /app
+
+# Bound Angular worker parallelism on shared build hosts:
+ENV NG_BUILD_MAX_WORKERS=2
 
 # Copy src:
 COPY ../ .

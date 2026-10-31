@@ -96,8 +96,8 @@
             <div class="current-info text-center">
               <small>{{ 'REPORTS.FORM.STATUS' | i18n }}:</small><br/>
               <span *ngIf="performingData.patient.status; then thenBlock else elseBlock"></span>
-              <ng-template #thenBlock><mat-icon class="color-ok" matTooltip="Activo">done</mat-icon></ng-template>
-              <ng-template #elseBlock><mat-icon class="color-fail" matTooltip="Inactivo">clear</mat-icon></ng-template>
+              <ng-template #thenBlock><mat-icon class="color-ok" matTooltip="{{ 'PERFORMING.FORM.ACTIVE' | i18n }}">done</mat-icon></ng-template>
+              <ng-template #elseBlock><mat-icon class="color-fail" matTooltip="{{ 'PERFORMING.FORM.INACTIVE' | i18n }}">clear</mat-icon></ng-template>
             </div>
             
             <div class="clear"></div>
@@ -150,8 +150,8 @@
           <div class="current-info text-center divider-alt">
             <small>{{ 'REPORTS.FORM.URGENCY' | i18n }}</small><br/>
             <div *ngIf="performingData.urgency; then thenBlockUrgency else elseBlockUrgency"></div>
-            <ng-template #thenBlockUrgency><mat-icon class="color-fail" matTooltip="Urgente">directions_run</mat-icon></ng-template>
-            <ng-template #elseBlockUrgency><mat-icon color="accent" matTooltip="Normal">man</mat-icon></ng-template>
+            <ng-template #thenBlockUrgency><mat-icon class="color-fail" matTooltip="{{ 'PERFORMING.LIST.TOOLTIPS.URGENT' | i18n }}">directions_run</mat-icon></ng-template>
+            <ng-template #elseBlockUrgency><mat-icon color="accent" matTooltip="{{ 'PERFORMING.LIST.TOOLTIPS.NORMAL' | i18n }}">man</mat-icon></ng-template>
           </div>
 
           <span *ngIf="performingData.appointment">
@@ -159,14 +159,14 @@
             <div class="current-info text-center divider-alt">
               <small>{{ 'REPORTS.FORM.HOSPITALIZATION' | i18n }}</small><br/>
               <div *ngIf="performingData.appointment.outpatient; then thenBlockOutpatient else elseBlockOutpatient"></div>
-              <ng-template #thenBlockOutpatient><mat-icon color="accent" matTooltip="Ambulatorio">house</mat-icon></ng-template>
-              <ng-template #elseBlockOutpatient><mat-icon class="color-fail" matTooltip="Internado">hotel</mat-icon></ng-template>
+              <ng-template #thenBlockOutpatient><mat-icon color="accent" matTooltip="{{ 'PERFORMING.LIST.TOOLTIPS.OUTPATIENT' | i18n }}">house</mat-icon></ng-template>
+              <ng-template #elseBlockOutpatient><mat-icon class="color-fail" matTooltip="{{ 'PERFORMING.LIST.TOOLTIPS.INPATIENT' | i18n }}">hotel</mat-icon></ng-template>
             </div>
 
             <!--appointment_pdf-->
             <div class="current-info text-center">
               <small>{{ 'REPORTS.FORM.APPOINTMENT_RECEIPT' | i18n }}</small><br/>
-              <mat-icon color="accent" matTooltip="PDF de cita" (click)="pdfService.createPDF('appointment', performingData.appointment._id)">picture_as_pdf</mat-icon>
+              <mat-icon color="accent" matTooltip="{{ 'PERFORMING.LIST.TOOLTIPS.PDF' | i18n }}" (click)="pdfService.createPDF('appointment', performingData.appointment._id)">picture_as_pdf</mat-icon>
             </div>
           </span>
           
@@ -215,8 +215,8 @@
             <div class="input-wrapper divider-alt"> <!-- start fxLayout wrapper -->
               <ul>
                 <li *ngIf="performingData.patient.person"><strong>{{ 'REPORTS.FORM.AGE' | i18n }}</strong> <span matTooltip="{{ 'REPORTS.FORM.AGE_AT_STUDY_TIME' | i18n }}"> {{ sharedFunctions.calculateAge(performingData.patient.person.birth_date, performingData.date) }}</span></li>
-                <li><strong>{{ 'REPORTS.FORM.HEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.height }} centímetros</li>
-                <li><strong>{{ 'REPORTS.FORM.WEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.weight }} kilogramos</li>
+                <li><strong>{{ 'REPORTS.FORM.HEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.height }} {{ 'PRIVATE_HEALTH.CENTIMETERS' | i18n }}</li>
+                <li><strong>{{ 'REPORTS.FORM.WEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.weight }} {{ 'PRIVATE_HEALTH.KILOGRAMS' | i18n }}</li>
               </ul>
             </div> <!-- end fxLayout wrapper -->
 
@@ -585,7 +585,7 @@
           <ng-template #thenBlockAttached>
             <mat-chip-list>
               <mat-chip *ngFor="let currentAtachedFile of fileManager.controller.attached_files.files | keyvalue">
-                <mat-icon (click)="fileManager.download(currentAtachedFile.key)">description</mat-icon><span (click)="fileManager.download(currentAtachedFile.key)"> &nbsp;{{ currentAtachedFile.value }}</span> &nbsp;<mat-icon matTooltip="Eliminar archivo" (click)="fileManager.delete(currentAtachedFile.key, 'attached_files', { 'element': 'appointments', '_id': performingData.appointment._id, 'current_files': getKeys(this.fileManager.controller.attached_files.files) })">close</mat-icon>
+                <mat-icon (click)="fileManager.download(currentAtachedFile.key)">description</mat-icon><span (click)="fileManager.download(currentAtachedFile.key)"> &nbsp;{{ currentAtachedFile.value }}</span> &nbsp;<mat-icon matTooltip="{{ 'COMMON.DELETE' | i18n }}" (click)="fileManager.delete(currentAtachedFile.key, 'attached_files', { 'element': 'appointments', '_id': performingData.appointment._id, 'current_files': getKeys(this.fileManager.controller.attached_files.files) })">close</mat-icon>
               </mat-chip>
             </mat-chip-list>
             <br/>

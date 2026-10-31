@@ -20,6 +20,9 @@ LABEL description="Sirius RIS is an open source Radiology Information System"
 # Copy mongorestore.sh:
 COPY ./docker/mongorestore.sh /docker-entrypoint-initdb.d/mongorestore.sh
 
+# Include the initial archive when no external dumps directory is mounted:
+COPY ./dumps/entrypoint.dump /dumps/entrypoint.dump
+
 # Give mongorestore.sh execute permissions:
 RUN chmod +x /docker-entrypoint-initdb.d/mongorestore.sh
 

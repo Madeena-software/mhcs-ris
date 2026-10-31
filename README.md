@@ -18,7 +18,7 @@
 
 * Scalable privileges for users.
 
-* Multilanguage ( `br`, `de`, `en`, `es`, `fr`, `it`, `ja`, `ru`, `zh`).
+* Multilanguage ( `br`, `de`, `en`, `es`, `fr`, `id`, `it`, `ja`, `ru`, `zh`). See [Indonesian language setup](./documentation/08_indonesian_language.md).
 
   
 

@@ -71,5 +71,5 @@ AC_PENALTY_TIME: 15   # Seconds
 # Used in signature PDF service.
 signature_length: 4628
 
-# Set the language of the responses:
+# Set the language of the responses (use 'id' for Bahasa Indonesia):
 language: 'en'

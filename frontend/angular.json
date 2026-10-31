@@ -35,7 +35,9 @@
               "./node_modules/@ckeditor/ckeditor5-build-classic/build/translations/es.js",
               "src/styles.css"
             ],
-            "scripts": [],
+            "scripts": [
+              "src/assets/plugins/customBuildCKE/translations/id.js"
+            ],
             "allowedCommonJsDependencies": [
               "url",
               "@auth0/angular-jwt",
@@ -109,7 +111,9 @@
               "./node_modules/@angular/material/prebuilt-themes/pink-bluegrey.css",
               "src/styles.css"
             ],
-            "scripts": []
+            "scripts": [
+              "src/assets/plugins/customBuildCKE/translations/id.js"
+            ]
           }
         }
       }
