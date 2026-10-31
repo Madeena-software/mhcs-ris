@@ -30,11 +30,19 @@ passed outside the sandbox (exit 0, about 170 seconds). The existing report form
 exceeds its warning budget by 413 bytes; the build completed successfully.
 
 Delivery: source commit `4f709855` is pushed to `origin/feature/indonesian-language`.
-Git author identity is configured as Ariftia. Local Coolify was found on port 8000
-(version 4.5.3). Created the previously absent `Madeena` project and selected its
-`production` environment on the local ARM64 server. Source-build configuration is
-in [Local Coolify deployment](09_coolify_deployment.md). Application creation and
-deployment are in progress. Other projects have not been modified.
+Git author identity is configured as Ariftia. Local Coolify 4.5.3 is on port 8000.
+`Madeena` → `production` → `MHCS RIS Indonesia` is deployed from `d8611f01` on the
+local ARM64 server, using [Local Coolify deployment](09_coolify_deployment.md).
+Application URL: `http://localhost:4000`, bound only to `127.0.0.1`.
 
-Remaining: Coolify application deployment/health verification, browser verification, and
-native clinical terminology review.
+Live verification: all three containers are healthy. Frontend, contextual
+dictionary, and proxied API return HTTP 200. App/calendar/editor settings are `id`;
+backend validation messages are Indonesian. The seeded superuser password was
+initialized, sign-in succeeded, and an authenticated database read passed.
+Login details are in `/home/ubuntu/.config/coolify/mhcs-ris-access.json` (mode 0600).
+Generated secrets are absent from the image metadata/history. Database and upload
+volumes are mounted; all previously existing applications remain healthy.
+
+Remaining: rendered browser verification and native clinical terminology review.
+PACS/Wezen integrations and a scheduled backup job are not configured by this
+deployment. No public domain was added.
