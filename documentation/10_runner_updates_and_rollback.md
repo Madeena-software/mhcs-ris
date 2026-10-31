@@ -48,9 +48,11 @@ an unchanged upstream image will not deploy source-only changes from this repo.
 Docker may recreate a changed service container. Project identity and mounted
 data remain the same; brief service interruption is possible. New or changed
 storage/network layouts are refused. MongoDB's implicit image volumes are also
-retained by their existing volume names. If `/app/uploads` contains files without
-a covering persistent mount, the update stops: persist those files through a
-separately approved migration before recreating the backend.
+retained by their existing volume names. Empty regular `.gitkeep` placeholder
+files in `/app/uploads` do not count as uploaded data. Other files, nonempty
+`.gitkeep` files, and symlinks without a covering persistent mount stop the update:
+persist those files through a separately approved migration before recreating
+the backend.
 
 ## Manual rollback and interrupted runs
 
@@ -106,6 +108,10 @@ Tests simulate Docker transactions. One test runs real `docker compose config`
 against disposable files, without contacting the Docker daemon. It checks that
 literal dollars in credentials and absolute mount paths survive recovery-file
 serialization. This parsing test is skipped when Docker CLI is unavailable.
+Node-based fixtures execute the actual upload probe when a Node CLI is available.
+
+After a workflow correction is pushed, start a **new workflow run from `main`**.
+Retrying an older failed run reuses its original commit and helper code.
 
 References: [Compose configuration rendering](https://docs.docker.com/reference/cli/docker/compose/config/),
 [Compose updates and mounted volumes](https://docs.docker.com/reference/cli/docker/compose/up/),

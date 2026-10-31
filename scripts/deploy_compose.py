@@ -13,6 +13,18 @@ import uuid
 
 SERVICES = tuple("opendicom_sirius_" + name for name in ("database", "backend", "frontend"))
 ACTIONS = ("up -d", "up -d --build", "rollback", "restart", "down", "ps", "pull")
+UPLOADS_PROBE = """
+const fs = require('fs');
+function hasUploads(path) {
+    return fs.existsSync(path) && fs.readdirSync(path, {withFileTypes: true}).some(entry => {
+        const child = path + '/' + entry.name;
+        if (entry.isDirectory()) return hasUploads(child);
+        // The image includes this empty source-control placeholder.
+        return !(entry.name === '.gitkeep' && entry.isFile() && fs.statSync(child).size === 0);
+    });
+}
+process.stdout.write(hasUploads(process.argv[1]) ? 'present' : 'empty');
+"""
 PROBES = {
     SERVICES[0]: ["mongosh", "--host", SERVICES[0], "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"],
     SERVICES[1]: ["node", "-e", "const e=process.env,s=e.SIRIUS_BACKEND_HTTP_ENABLED==='false';require(s?'https':'http').get({hostname:'127.0.0.1',port:s?(e.SIRIUS_BACKEND_HTTPS_PORT||2003):(e.SIRIUS_BACKEND_HTTP_PORT||2000),path:'/',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"],
@@ -257,9 +269,9 @@ class Deployment:
         if action.startswith("up ") and not any(
                 "/app/uploads" == mount["Destination"] or "/app/uploads".startswith(mount["Destination"].rstrip("/") + "/")
                 for mount in backend["Mounts"]):
-            probe = "const fs=require('fs');function has(p){return fs.existsSync(p)&&fs.readdirSync(p,{withFileTypes:true}).some(e=>e.isDirectory()?has(p+'/'+e.name):true)}process.stdout.write(has('/app/uploads')?'present':'empty')"
-            if backend["State"]["Status"] == "running" and docker("exec", backend["Id"], "node", "-e", probe).strip() == "present":
-                raise DeployError("Backend has unmounted uploads; persist /app/uploads before updating")
+            if backend["State"]["Status"] == "running" and docker(
+                    "exec", backend["Id"], "node", "-e", UPLOADS_PROBE, "/app/uploads").strip() == "present":
+                raise DeployError("Backend has real unmounted uploads (empty .gitkeep ignored); persist /app/uploads before updating")
         ready(meta["project"])
         previous, record = self.snapshot(meta, config, items)
         if action in ("down", "restart"):

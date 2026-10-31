@@ -37,7 +37,7 @@ authority_note: This context is supporting repository knowledge. Approved reposi
 ## Active tasks
 
 - `.agents/tasks/update-existing-deployment-with-rollback.md` at
-  `27132c55822842c71da9da304d4a5353403c709a` — update the existing Compose
+  `4adcbe6a25e1abbe3362dc68c8b6b8808fda1371` — update the existing Compose
   deployment on the production runner with automatic/manual rollback. Local
   implementation and checks are recorded in `documentation/WORKLOG.md`;
   no live dispatch or release is authorized by implementation acceptance.

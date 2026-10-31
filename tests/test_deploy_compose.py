@@ -1,10 +1,12 @@
 """Deployment transaction tests use a fake Docker engine; no live Docker access."""
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -92,6 +94,10 @@ class FakeDocker:
 
 class DeploymentTests(unittest.TestCase):
     def setUp(self):
+        # Fake deployment successes must not look like live deployment evidence in CI logs.
+        output = patch("sys.stdout", new=io.StringIO())
+        output.start()
+        self.addCleanup(output.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
@@ -251,6 +257,56 @@ class DeploymentTests(unittest.TestCase):
         self.run_action("rollback")
         restored = self.deployment.record(self.deployment.state["current"])
         self.assertEqual(restored["env_text"], "PASSWORD=old$literal\n")
+
+    @unittest.skipUnless(shutil.which("node"), "Node CLI unavailable")
+    def test_empty_upload_placeholder_allows_update(self):
+        uploads = self.directory / "uploads"
+        uploads.mkdir()
+        (uploads / ".gitkeep").touch()
+
+        def with_placeholder(*args, **kwargs):
+            if args[0] == "exec" and deploy.UPLOADS_PROBE in args:
+                return subprocess.run(["node", "-e", deploy.UPLOADS_PROBE, str(uploads)],
+                                      text=True, capture_output=True, check=True).stdout
+            return self.engine(*args, **kwargs)
+
+        with patch.object(deploy, "docker", side_effect=with_placeholder):
+            self.run_action()
+        self.assertEqual(self.images(), ["sha256:new0", "sha256:new1", "sha256:new2"])
+
+
+@unittest.skipUnless(shutil.which("node"), "Node CLI unavailable; actual uploads probe checks skipped")
+class UploadProbeTests(unittest.TestCase):
+    def probe(self, path):
+        return subprocess.run(["node", "-e", deploy.UPLOADS_PROBE, str(path)],
+                              text=True, capture_output=True, check=True).stdout
+
+    def test_tracked_upload_directory_has_only_placeholder(self):
+        path = Path(__file__).resolve().parents[1] / "backend/src/uploads"
+        self.assertEqual(self.probe(path), "empty")
+
+    def test_nested_empty_placeholders_do_not_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".gitkeep").touch()
+            (root / "nested").mkdir()
+            (root / "nested/.gitkeep").touch()
+            self.assertEqual(self.probe(root), "empty")
+
+    def test_real_hidden_nested_and_nonempty_placeholder_files_block(self):
+        for name in ["report.pdf", ".hidden", ".gitkeep", "nested/report.pdf"]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                file = root / name
+                file.parent.mkdir(exist_ok=True)
+                file.write_text("uploaded content")
+                self.assertEqual(self.probe(root), "present")
+
+    def test_symlink_named_gitkeep_is_not_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".gitkeep").symlink_to(root / "missing")
+            self.assertEqual(self.probe(root), "present")
 
 
 @unittest.skipUnless(shutil.which("docker"), "Docker CLI unavailable; parsing integration check skipped")

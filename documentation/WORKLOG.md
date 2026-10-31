@@ -1,5 +1,26 @@
 # Worklog
 
+## 2026-10-31 UTC — Empty upload placeholder guard correction
+
+- Model: Not available.
+- Review: [Failed production workflow](https://github.com/Madeena-software/mhcs-ris/actions/runs/41194024495)
+  at `23714867` passed all 20 helper tests, then stopped with the unmounted-upload
+  guard before any pull/update. The guard also reports the source-controlled,
+  empty `backend/src/uploads/.gitkeep` as an upload; reproduced locally using the
+  exact original Node expression. Live upload contents were not inspected.
+- Verdict: Remediation required within the existing delivery objective. Revised
+  governing task: `.agents/tasks/update-existing-deployment-with-rollback.md` at
+  `4adcbe6a25e1abbe3362dc68c8b6b8808fda1371`; implementation baseline `23714867`.
+- Change: Share the actual Node upload probe with fixture tests. Ignore only empty
+  regular `.gitkeep` placeholders. Nonempty placeholders, ordinary/hidden/nested
+  files, and symlinks still block unsafe backend recreation. Clarify the guard
+  error and suppress fake update-success output from unit tests in CI logs.
+- Verification: All 25 tests pass, including actual Node fixtures, a full mocked
+  update with a placeholder, preserved refusal for real uploads, and the existing
+  rollback/Compose parser checks. Python syntax and diff checks pass.
+- Limits: No production rerun or upload migration. New workflow runs must select
+  the corrected `main` commit; retrying the old run executes its original code.
+
 ## 2026-10-31 UTC — Existing production Compose updates and rollback
 
 - Model: Not available.

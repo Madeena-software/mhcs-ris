@@ -1,6 +1,14 @@
 # Project state
 
 Updated: 2026-10-31 UTC
+Latest workflow remediation: run `41194024495` passed helper tests but stopped
+before deployment at the unmounted-upload guard. The guard counted the tracked
+zero-byte `.gitkeep` placeholder as uploaded data. The helper now ignores only
+empty regular `.gitkeep` files; real files and symlinks remain protected.
+All 25 local tests pass, including actual Node probe fixtures. No production
+rerun of this correction has been dispatched; start a new run from `main` after
+the fix is pushed rather than retrying the old commit.
+
 Current maintenance: production-runner deployment updates and rollback are
 implemented locally in `.github/workflows/deploy-docker-compose.yml` and
 `scripts/deploy_compose.py`. The workflow reuses the existing Compose project and
