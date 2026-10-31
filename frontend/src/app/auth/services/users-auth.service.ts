@@ -277,7 +277,7 @@ export class UsersAuthService {
   // USER SIGNIN ERROR:
   //--------------------------------------------------------------------------------------------------------------------//
   private userSigninError(message: string): void{
-    this.snackBar.open(message, 'ACEPTAR');
+    this.snackBar.open(message, this.sharedFunctions.i18n.instant('DIALOGS.PASSWORD_REQUEST.ACCEPT') || 'OK');
     this.removeToken();
   }
   //--------------------------------------------------------------------------------------------------------------------//

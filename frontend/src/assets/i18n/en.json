@@ -1945,7 +1945,7 @@
       "CANCEL_BUTTON": "CANCEL",
       "SAVE_BUTTON": "SAVE"
     },
-    "SERVICE" : {
+    "SERVICE": {
       "PERMISSION_VALIDATION_ERROR": "You must upload the necessary data to add the permission to the user."
     }
   },
@@ -2395,5 +2395,13 @@
       "ACTIVE": "Active",
       "INACTIVE": "Inactive"
     }
+  },
+  "TIME_UNITS": {
+    "DAYS": "days",
+    "DAY": "day",
+    "MONTHS": "months",
+    "MONTH": "month",
+    "YEARS": "years",
+    "YEAR": "year"
   }
 }

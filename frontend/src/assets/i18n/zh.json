@@ -2395,5 +2395,13 @@
       "ACTIVE": "激活",
       "INACTIVE": "未激活"
     }
+  },
+  "TIME_UNITS": {
+    "DAYS": "天",
+    "DAY": "天",
+    "MONTHS": "个月",
+    "MONTH": "个月",
+    "YEARS": "岁",
+    "YEAR": "岁"
   }
 }

@@ -588,11 +588,11 @@ export class FormComponent implements OnInit {
 
         switch(this.form_action){
           case 'insert':
-            message = 'insertar';
+            message = this.i18n.instant('COMMON.SAVE').toLowerCase();
             break;
 
           case 'update':
-            message = 'editar';
+            message = this.i18n.instant('COMMON.EDIT').toLowerCase();
             break;
         }
 

@@ -2395,5 +2395,13 @@
       "ACTIVE": "アクティブ",
       "INACTIVE": "非アクティブ"
     }
+  },
+  "TIME_UNITS": {
+    "DAYS": "日",
+    "DAY": "日",
+    "MONTHS": "ヶ月",
+    "MONTH": "ヶ月",
+    "YEARS": "歳",
+    "YEAR": "歳"
   }
 }

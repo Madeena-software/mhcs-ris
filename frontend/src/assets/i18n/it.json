@@ -2395,5 +2395,13 @@
       "ACTIVE": "Attivo",
       "INACTIVE": "Inattivo"
     }
+  },
+  "TIME_UNITS": {
+    "DAYS": "giorni",
+    "DAY": "giorno",
+    "MONTHS": "mesi",
+    "MONTH": "mese",
+    "YEARS": "anni",
+    "YEAR": "anno"
   }
 }

@@ -1597,20 +1597,21 @@ export class SharedFunctionsService {
       //Check months:
       if(months_age <= 0){
         //Set age (in days):
-        return parseInt(today.toLocaleString("es-AR", { day: "2-digit" }), 10) + ' días';
+        const days = parseInt(today.toLocaleString("es-AR", { day: "2-digit" }), 10);
+        return days + ' ' + (days === 1 ? this.i18n.instant('TIME_UNITS.DAY') : this.i18n.instant('TIME_UNITS.DAYS'));
 
       } else if(months_age == 1) {
-        return months_age + ' mes';
+        return months_age + ' ' + this.i18n.instant('TIME_UNITS.MONTH');
 
       } else {
-        return months_age + ' meses';
+        return months_age + ' ' + this.i18n.instant('TIME_UNITS.MONTHS');
       }
 
     } else if(age == 1) {
-      return age + ' año';
+      return age + ' ' + this.i18n.instant('TIME_UNITS.YEAR');
 
     } else {
-      return age + ' años';
+      return age + ' ' + this.i18n.instant('TIME_UNITS.YEARS');
     }
   }
   //--------------------------------------------------------------------------------------------------------------------//

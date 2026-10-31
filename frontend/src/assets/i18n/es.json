@@ -1945,7 +1945,7 @@
       "CANCEL_BUTTON": "CANCELAR",
       "SAVE_BUTTON": "GUARDAR"
     },
-    "SERVICE" : {
+    "SERVICE": {
       "PERMISSION_VALIDATION_ERROR": "Debe cargar los datos necesarios para agregar el permiso al usuario."
     }
   },
@@ -2114,14 +2114,14 @@
       "DEFAULT-MODALITY-ERROR": "Hubo un problema al determinar la modalidad por defecto."
     }
   },
-  "EVENTS_LOG" : {
-    "1" : "Inicio de sesión",
-    "2" : "Creación",
-    "3" : "Edición",
-    "4" : "Eliminación",
-    "5" : "Firma",
-    "6" : "Autenticación",
-    "7" : "Envío de correo"
+  "EVENTS_LOG": {
+    "1": "Inicio de sesión",
+    "2": "Creación",
+    "3": "Edición",
+    "4": "Eliminación",
+    "5": "Firma",
+    "6": "Autenticación",
+    "7": "Envío de correo"
   },
   "DOCUMENT_TYPES": {
     "1": "ID Nacional (DNI, CI, CURP, RUT)",
@@ -2234,7 +2234,7 @@
     "3": "Indicacion incorrecta",
     "4": "No se presentó",
     "5": "Sin preparacion o preparación incorrecta",
-	  "6": "Claustrofóbia",
+    "6": "Claustrofóbia",
     "7": "Embarazo",
     "8": "Hiperglicemia",
     "9": "Hipoglicemia",
@@ -2395,5 +2395,13 @@
       "ACTIVE": "Activo",
       "INACTIVE": "Inactivo"
     }
+  },
+  "TIME_UNITS": {
+    "DAYS": "días",
+    "DAY": "día",
+    "MONTHS": "meses",
+    "MONTH": "mes",
+    "YEARS": "años",
+    "YEAR": "año"
   }
 }
