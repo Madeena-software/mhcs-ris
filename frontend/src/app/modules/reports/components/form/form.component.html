@@ -215,8 +215,8 @@
             <div class="input-wrapper divider-alt"> <!-- start fxLayout wrapper -->
               <ul>
                 <li *ngIf="performingData.patient.person"><strong>{{ 'REPORTS.FORM.AGE' | i18n }}</strong> <span matTooltip="{{ 'REPORTS.FORM.AGE_AT_STUDY_TIME' | i18n }}"> {{ sharedFunctions.calculateAge(performingData.patient.person.birth_date, performingData.date) }}</span></li>
-                <li><strong>{{ 'REPORTS.FORM.HEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.height }} centímetros</li>
-                <li><strong>{{ 'REPORTS.FORM.WEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.weight }} kilogramos</li>
+                <li><strong>{{ 'REPORTS.FORM.HEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.height }} {{ 'PRIVATE_HEALTH.CENTIMETERS' | i18n }}</li>
+                <li><strong>{{ 'REPORTS.FORM.WEIGHT' | i18n }}</strong> {{ performingData.appointment.private_health.weight }} {{ 'PRIVATE_HEALTH.KILOGRAMS' | i18n }}</li>
               </ul>
             </div> <!-- end fxLayout wrapper -->
 
