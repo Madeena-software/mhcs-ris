@@ -1,7 +1,7 @@
 ---
 title: Deploy Indonesian source through the production runner
 document_id: AGENT-TASK-RIS-003
-version: 1.0
+version: 1.1
 status: validated-published
 language: en-US
 last_updated: 2026-10-31
@@ -77,3 +77,23 @@ or material scope expansion. Never bypass guards to make a run pass.
 Executor returns Review Required with exact revisions and observed checks;
 Reviewer accepts the immutable implementation before the authorized dispatch.
 Production failure requires bounded diagnosis/remediation or an explicit blocker.
+
+## Bounded remediation — frontend build diagnostics
+
+Review basis: implementation `0dfdf9faa57f78204504f7a329c87a05222fcd93`,
+governed by this task at `dd26a76cd97e110ad256c10c1307be260ebcd139`.
+Run `41220372005` passed helper tests (five Node fixture tests skipped because
+the runner has no host Node), built the backend, then failed building the frontend
+before any pull/recreation. Verdict: Remediation Required. The generic Docker
+error suppressed the build failure detail, preventing diagnosis.
+
+Baseline for remediation: `60dffec1` (resolve full Git identity before execution).
+Publish this revision immutably before changes. Permit bounded Docker build-only
+failure diagnostics: these commands receive source context, without runtime env
+files, build secrets or credential build arguments. Never echo stderr for Compose
+render/inspect or runtime secret-bearing commands. Test that diagnostic separation.
+Retry the authorized whole-stack deployment after verified diagnostic changes;
+use its observed cause to repair the existing frontend build within this same
+objective, with a republished remediation contract when the correction is known.
+Keep all safety guards and no-mutation-on-build-failure behavior. No host cleanup,
+daemon changes, storage changes or secret disclosure is authorized.
