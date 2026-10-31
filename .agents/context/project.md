@@ -36,7 +36,18 @@ authority_note: This context is supporting repository knowledge. Approved reposi
 
 ## Active tasks
 
-- `.agents/tasks/deploy-sirius-ris-via-runner.md` — WP-01: Automate OpenDICOM Sirius RIS Deployment via Self-Hosted Runner.
+- `.agents/tasks/update-existing-deployment-with-rollback.md` at
+  `27132c55822842c71da9da304d4a5353403c709a` — update the existing Compose
+  deployment on the production runner with automatic/manual rollback. Local
+  implementation and checks are recorded in `documentation/WORKLOG.md`;
+  no live dispatch or release is authorized by implementation acceptance.
+- `.agents/tasks/deploy-sirius-ris-via-runner.md` — historical WP-01 runner
+  automation contract; live acceptance was not re-established during this change.
+
+The deployment workflow uses published upstream images from `docker-compose.yml`
+and preserves the existing project's host mounts. Its recovery files live outside
+the Actions checkout. See `documentation/10_runner_updates_and_rollback.md`.
+The separately documented Coolify application is outside this workflow's scope.
 
 ## Intended authority map
 

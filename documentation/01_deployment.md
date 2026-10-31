@@ -1,5 +1,9 @@
 # Basic deployment
 
+For updates to an **existing production-runner deployment** through GitHub
+Actions, see [Runner updates and rollback](10_runner_updates_and_rollback.md).
+The commands below also describe fresh manual installations.
+
 **Sirius RIS** is fully dockerized and its images are publicly accessible in [DockerHub](https://hub.docker.com/u/opendicom?page=1&search=sirius).
 
 * **STEP 1** - Clone Sirius-RIS repository:

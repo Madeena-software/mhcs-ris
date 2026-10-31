@@ -1,5 +1,39 @@
 # Worklog
 
+## 2026-10-31 UTC — Existing production Compose updates and rollback
+
+- Model: Not available.
+- Request: Update GitHub deployment automation on the other production server to
+  reuse its existing deployment and recover from unsuccessful updates. Coolify is
+  excluded. The human authorized implementation and local commits.
+- Governing task: `.agents/tasks/update-existing-deployment-with-rollback.md` at
+  `27132c55822842c71da9da304d4a5353403c709a`, based on
+  `24ff711b145228492bffddaab37ca1081640978b` plus the task publication commit.
+- Change: Separate non-cleaning checkout; discover existing Compose identity and
+  verify host mounts; preserve implicit volumes and protect unmounted uploads;
+  retain exact local images, effective environment, and configuration outside the
+  checkout. Add health probes, automatic recovery with failed job status, manual
+  rollback, pending recovery records, GitHub concurrency, and a host file lock.
+  Remove host Docker daemon reconfiguration from application deployment.
+- Compatibility: Keep manual dispatch and the existing runner labels/service
+  names. `up -d --build` updates published images because this Compose file has no
+  builds. `down` now stops without removing the containers/network/storage.
+- Verification: `python3 -B -m unittest discover -s tests -p test_deploy_compose.py`
+  passes 20 tests, including real Compose config parsing with literal-dollar
+  credentials and mount-path round trips. Failure/recovery, missing snapshots,
+  interrupted jobs, service-specific updates, stopped-stack resume, and unsafe
+  storage changes use isolated fixtures/fake Docker; no live Docker mutation.
+  actionlint 1.7.12 passes with the existing `production` runner label supplied
+  through a temporary configuration. Python syntax compilation and diff checks
+  pass. Real parser checks found and corrected Compose's escaped-dollar output.
+- Intelligence: Fast graph indexing completed, but the new helper was excluded
+  and new tests were untracked; coverage checks and direct source review were
+  used. No claim of complete graph coverage.
+- Limits: No push, deployment, production dispatch, or live rollback drill. Image
+  and state retention require disk housekeeping; database restoration/migrations
+  are separate operations. Operator instructions are in
+  `10_runner_updates_and_rollback.md`.
+
 ## 2026-10-31 UTC — Indonesian language support
 
 - Model: Not available.

@@ -1,6 +1,16 @@
 # Project state
 
 Updated: 2026-10-31 UTC
+Current maintenance: production-runner deployment updates and rollback are
+implemented locally in `.github/workflows/deploy-docker-compose.yml` and
+`scripts/deploy_compose.py`. The workflow reuses the existing Compose project and
+mounts, records exact recovery images/configuration, checks readiness, and supports
+automatic/manual recovery. It uses a separate checkout and private recovery state.
+See [Runner operations](10_runner_updates_and_rollback.md). Isolated transaction
+tests and real Compose configuration parsing pass; actionlint passes with the
+existing custom `production` runner label configured. No production workflow
+dispatch or live rollback drill has been performed. Changes are not pushed.
+
 Current task: Indonesian language support on `feature/indonesian-language`, based on `origin/develop`.
 
 Implemented: complete Indonesian frontend/backend dictionaries and registration of

@@ -4,19 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Docker Compose action to execute'
+        description: 'Update existing stack, roll back, or operate it (down stops without removal)'
         required: true
         default: 'up -d'
         type: choice
         options:
           - 'up -d'
           - 'up -d --build'
+          - 'rollback'
           - 'restart'
           - 'down'
           - 'ps'
           - 'pull'
       target_service:
-        description: 'Specific service (optional: empty for all services)'
+        description: 'Optional service; rollback and down require an empty value'
         required: false
         default: ''
         type: string
@@ -24,140 +25,32 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sirius-ris-production-compose
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    name: Deploy / Operate Docker Compose on Target Server
+    name: Update / Roll Back Existing Docker Compose Deployment
     runs-on: [self-hosted, linux, production]
     timeout-minutes: 60
-
-    env:
-      SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
-
     steps:
-      - name: Checkout repository code
+      # The original checkout can hold live MongoDB bind mounts. Never clean it.
+      - name: Checkout deployment tools in a separate directory
         uses: actions/checkout@v4
+        with:
+          path: .ris-ci-source
+          clean: false
+          persist-credentials: false
 
-      - name: Setup environment file
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [ -n "${{ secrets.DOCKER_COMPOSE_ENV }}" ]; then
-            echo "Injecting secrets into docker-compose.env"
-            echo "${{ secrets.DOCKER_COMPOSE_ENV }}" > docker-compose.env
-          elif [ ! -f docker-compose.env ]; then
-            echo "docker-compose.env missing, copying default if available"
-            touch docker-compose.env
-          fi
+      - name: Verify deployment helper
+        run: python3 -B -m unittest discover -s .ris-ci-source/tests -p 'test_deploy_compose.py'
 
-      - name: Pre-flight Port Conflict Check
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Checking for port conflicts before startup..."
-          source docker-compose.env 2>/dev/null || true
-          
-          CHECK_PORTS=("${SIRIUS_FRONTEND_PORT:-4000}" "${SIRIUS_BACKEND_PORT:-2000}" "${SIRIUS_DB_PORT:-27017}")
-          for p in "${CHECK_PORTS[@]}"; do
-            # Check if port listening by a process other than docker-proxy for our containers
-            if ss -tuln | grep -q ":$p "; then
-              echo "WARNING: Port $p is currently in use on host."
-              echo "If this is not opendicom containers, change SIRIUS_*_PORT in docker-compose.env or GitHub Secrets."
-            else
-              echo "Port $p is available."
-            fi
-          done
-
-      - name: Optimize Docker daemon network
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Configuring Docker daemon concurrent download limits to prevent timeouts..."
-          DAEMON_JSON="/etc/docker/daemon.json"
-          _sudo() {
-            if [ -n "${SUDO_PASSWORD:-}" ]; then
-              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
-            else
-              sudo "$@"
-            fi
-          }
-
-          if [ ! -f "$DAEMON_JSON" ] || ! grep -q "max-concurrent-downloads" "$DAEMON_JSON" 2>/dev/null; then
-            echo "Applying max-concurrent-downloads: 2 to /etc/docker/daemon.json"
-            TMP_D=$(mktemp)
-            if [ -f "$DAEMON_JSON" ]; then
-              # Merge existing json or overwrite safely
-              _sudo cp "$DAEMON_JSON" "$TMP_D"
-              python3 -c "import json; d=json.load(open('$TMP_D')); d['max-concurrent-downloads']=2; json.dump(d,open('$TMP_D','w'),indent=2)" 2>/dev/null || echo '{"max-concurrent-downloads": 2}' > "$TMP_D"
-            else
-              echo '{"max-concurrent-downloads": 2}' > "$TMP_D"
-            fi
-            _sudo mkdir -p /etc/docker
-            _sudo cp "$TMP_D" "$DAEMON_JSON"
-            _sudo chmod 644 "$DAEMON_JSON"
-            rm -f "$TMP_D"
-            _sudo systemctl reload docker || true
-          fi
-
-      - name: Pull Docker images with retry
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Pulling pre-built official images..."
-
-          pull_with_retry() {
-            local img="$1"
-            local max_attempts=5
-            local count=1
-            echo "Pulling $img..."
-            until docker pull "$img" || [ $count -ge $max_attempts ]; do
-              echo "Pull failed for $img (attempt $count/$max_attempts). Retrying in 10s..."
-              count=$((count + 1))
-              sleep 10
-            done
-            if [ $count -ge $max_attempts ]; then
-              docker pull "$img"
-            fi
-          }
-
-          ACTION="${{ inputs.action }}"
-          if [[ "$ACTION" != "down" && "$ACTION" != "ps" ]]; then
-            # Database
-            pull_with_retry "opendicom/sirius-database:8.2.6"
-            # Backend
-            pull_with_retry "opendicom/sirius-backend:1.8.1"
-            # Frontend
-            pull_with_retry "opendicom/sirius-frontend:1.8.1"
-          fi
-
-      - name: Run Docker Compose command
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          _docker_compose() {
-            if [ -n "${SUDO_PASSWORD:-}" ]; then
-              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' docker compose "$@"
-            else
-              docker compose "$@"
-            fi
-          }
-
-          ACTION="${{ inputs.action }}"
-          TARGET_SERVICE="${{ inputs.target_service }}"
-
-          echo "Executing: docker compose $ACTION $TARGET_SERVICE"
-          if [ -n "$TARGET_SERVICE" ]; then
-            _docker_compose $ACTION $TARGET_SERVICE
-          else
-            _docker_compose $ACTION
-          fi
-
-      - name: Verify Running Containers
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [ -n "${SUDO_PASSWORD:-}" ]; then
-            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' docker compose ps
-          else
-            docker compose ps
-          fi
+      - name: Update existing deployment or perform requested operation
+        env:
+          DEPLOY_ACTION: ${{ inputs.action }}
+          TARGET_SERVICE: ${{ inputs.target_service }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          DOCKER_COMPOSE_ENV: ${{ secrets.DOCKER_COMPOSE_ENV }}
+          RIS_DEPLOY_STATE_DIR: ${{ vars.RIS_DEPLOY_STATE_DIR }}
+        run: python3 .ris-ci-source/scripts/deploy_compose.py
