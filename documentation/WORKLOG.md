@@ -22,8 +22,12 @@
   passes with the existing production runner label configured. Both dictionary
   validators, Python syntax and diff checks pass.
 - Review: source diff and observed checks satisfy the local implementation
-  criteria; immutable implementation acceptance is resolved after its commit.
-  Live source builds, deployment and rollback drill remain unverified here.
+  criteria. Reviewed immutable implementation `0dfdf9faa57f78204504f7a329c87a05222fcd93`
+  is accepted against governing task `dd26a76c`; this is the new accepted
+  implementation baseline. User release authorization is separately recorded above.
+- Delivery: pushed to `origin/main` and dispatched production run `41220372005`
+  at that implementation revision. Runner accepted the job; checkout is in progress.
+  Live source-build/deployment completion and rollback drill remain unverified.
 
 ## 2026-10-31 UTC — Empty upload placeholder guard correction
 

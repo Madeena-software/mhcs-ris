@@ -10,8 +10,10 @@ The updated workflow sets `RIS_BUILD_SOURCE=true` and `SIRIUS_LANGUAJE=id`.
 Updates build the repository frontend/backend before changing containers, verify
 runtime language settings/dictionaries, and preserve the existing project,
 storage and exact-image rollback. All 32 isolated/local parser tests, Actions
-syntax and both Indonesian dictionary validators pass. The source rollout is
-pending push/dispatch; no live source-build or recovery success is claimed yet.
+syntax and both Indonesian dictionary validators pass. Implementation `0dfdf9faa57f78204504f7a329c87a05222fcd93` is accepted after
+source review and those checks. It was pushed to `origin/main`; production run
+`41220372005` was dispatched and is in progress. Live source-build/recovery
+success is not yet established.
 See [Runner operations](10_runner_updates_and_rollback.md).
 
 Current task: Indonesian language support on `feature/indonesian-language`, based on `origin/develop`.
