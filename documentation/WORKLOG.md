@@ -11,6 +11,11 @@
   diagnostics remain suppressed, covered by a dedicated separation test.
 - Verification: all 33 local tests and diff checks pass. The live cause remains
   unknown until the authorized retry; running application remains unchanged.
+- Review/delivery: diagnostics implementation `1474b9b5c826e4c55a0adcd0d21e8a9afbe1abb9`
+  is accepted for bounded diagnostics under task revision `cf03dbbe`; no completed
+  source rollout is accepted. Pushed it to main and dispatched retry `41223157473`.
+  Latest observed state: checkout in progress. Canceled run `41223121827`, which
+  selected the task-only publication before the diagnostic fix was committed.
 
 # Worklog
 

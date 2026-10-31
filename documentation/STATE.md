@@ -15,7 +15,11 @@ source review and those checks. It was pushed to `origin/main`; production run
 `41220372005` failed during frontend build after backend build succeeded. No
 running-container mutation occurred. Build-only diagnostics now retain the last
 60 lines; Compose/runtime diagnostics remain private. Remediation task revision:
-`cf03dbbe7802e27746320e50f48b6b152c9c39ab`. All 33 local tests pass; retry pending.
+`cf03dbbe7802e27746320e50f48b6b152c9c39ab`. All 33 local tests pass. Diagnostics implementation `1474b9b5` is accepted
+for this bounded remediation and pushed. Retry `41223157473` was dispatched at
+that revision and is in progress (checkout). Run `41223121827` was canceled
+before deployment because it selected the task-publication revision.
+Frontend build cause and completed Indonesian rollout remain unverified.
 See [Runner operations](10_runner_updates_and_rollback.md).
 
 Current task: Indonesian language support on `feature/indonesian-language`, based on `origin/develop`.
